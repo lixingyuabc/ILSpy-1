@@ -47,7 +47,7 @@ namespace ICSharpCode.Decompiler.Tests.Helpers
 			if ((flags & CompilerOptions.UseMcsMask) == 0)
 			{
 				CompilerResults results = new CompilerResults();
-				results.PathToAssembly = outputFileName ?? Path.GetTempFileName();
+				results.PathToAssembly = outputFileName;
 
 				var (roslynVersion, languageVersion) = (flags & CompilerOptions.UseRoslynMask) switch {
 					0 => ("legacy", "11"),
@@ -60,19 +60,22 @@ namespace ICSharpCode.Decompiler.Tests.Helpers
 				var vbcPath = roslynToolset.GetVBCompiler(roslynVersion);
 
 				IEnumerable<string> references;
+				string libPath;
 				if ((flags & CompilerOptions.UseRoslynMask) != 0 && (flags & CompilerOptions.TargetNet40) == 0)
 				{
 					references = coreDefaultReferences.Select(r => "-r:\"" + r + "\"");
+					libPath = coreRefAsmPath;
 				}
 				else
 				{
 					references = defaultReferences.Select(r => "-r:\"" + r + "\"");
+					libPath = RefAsmPath;
 				}
 				if (flags.HasFlag(CompilerOptions.ReferenceVisualBasic))
 				{
 					references = references.Concat(new[] { "-r:\"Microsoft.VisualBasic.dll\"" });
 				}
-				string otherOptions = $"-noconfig " +
+				string otherOptions = $"-nologo -noconfig " +
 					"-optioninfer+ -optionexplicit+ " +
 					$"-langversion:{languageVersion} " +
 					$"/optimize{(flags.HasFlag(CompilerOptions.Optimize) ? "+ " : "- ")}";
@@ -116,15 +119,21 @@ namespace ICSharpCode.Decompiler.Tests.Helpers
 				}
 
 				var command = Cli.Wrap(vbcPath)
-					.WithArguments($"{otherOptions}{string.Join(" ", references)} -out:\"{Path.GetFullPath(results.PathToAssembly)}\" {string.Join(" ", sourceFileNames.Select(fn => '"' + Path.GetFullPath(fn) + '"'))}")
+					.WithArguments($"{otherOptions}-libpath:\"{libPath}\" {string.Join(" ", references)} -out:\"{Path.GetFullPath(results.PathToAssembly)}\" {string.Join(" ", sourceFileNames.Select(fn => '"' + Path.GetFullPath(fn) + '"'))}")
 					.WithValidation(CommandResultValidation.None);
 				Console.WriteLine($"\"{command.TargetFilePath}\" {command.Arguments}");
 
 				var result = await command.ExecuteBufferedAsync().ConfigureAwait(false);
 
-				Console.WriteLine("output: " + result.StandardOutput);
-				Console.WriteLine("errors: " + result.StandardError);
-				Assert.AreEqual(0, result.ExitCode, "vbc failed");
+				if (!string.IsNullOrWhiteSpace(result.StandardOutput))
+				{
+					Console.WriteLine("output:" + Environment.NewLine + result.StandardOutput);
+				}
+				if (!string.IsNullOrWhiteSpace(result.StandardError))
+				{
+					Console.WriteLine("errors:" + Environment.NewLine + result.StandardError);
+				}
+				Assert.That(result.ExitCode, Is.EqualTo(0), "vbc failed");
 
 				return results;
 			}

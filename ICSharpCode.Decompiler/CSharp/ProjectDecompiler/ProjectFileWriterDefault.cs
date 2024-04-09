@@ -25,6 +25,7 @@ using System.Xml;
 
 using ICSharpCode.Decompiler.Metadata;
 using ICSharpCode.Decompiler.Solution;
+using ICSharpCode.Decompiler.Util;
 
 namespace ICSharpCode.Decompiler.CSharp.ProjectDecompiler
 {
@@ -43,11 +44,11 @@ namespace ICSharpCode.Decompiler.CSharp.ProjectDecompiler
 		public void Write(
 			TextWriter target,
 			IProjectInfoProvider project,
-			IEnumerable<(string itemType, string fileName)> files,
-			PEFile module)
+			IEnumerable<ProjectItemInfo> files,
+			MetadataFile module)
 		{
 			const string ns = "http://schemas.microsoft.com/developer/msbuild/2003";
-			string platformName = TargetServices.GetPlatformName(module);
+			string platformName = module is PEFile peFile ? TargetServices.GetPlatformName(peFile) : "AnyCPU";
 			var targetFramework = TargetServices.DetectTargetFramework(module);
 			if (targetFramework.Identifier == ".NETFramework" && targetFramework.VersionNumber == 200)
 				targetFramework = TargetServices.DetectTargetFrameworkNET20(module, project.AssemblyResolver, targetFramework);
@@ -79,26 +80,22 @@ namespace ICSharpCode.Decompiler.CSharp.ProjectDecompiler
 				w.WriteValue(platformName);
 				w.WriteEndElement(); // </Platform>
 
-				if (module.Reader.PEHeaders.IsDll)
+				string outputType;
+
+				switch ((module as PEFile)?.Reader.PEHeaders.PEHeader.Subsystem)
 				{
-					w.WriteElementString("OutputType", "Library");
-				}
-				else
-				{
-					switch (module.Reader.PEHeaders.PEHeader.Subsystem)
-					{
-						case Subsystem.WindowsGui:
-							w.WriteElementString("OutputType", "WinExe");
-							break;
-						case Subsystem.WindowsCui:
-							w.WriteElementString("OutputType", "Exe");
-							break;
-						default:
-							w.WriteElementString("OutputType", "Library");
-							break;
-					}
+					case Subsystem.WindowsGui:
+						outputType = "WinExe";
+						break;
+					case Subsystem.WindowsCui:
+						outputType = "Exe";
+						break;
+					default:
+						outputType = "Library";
+						break;
 				}
 
+				w.WriteElementString("OutputType", outputType);
 				w.WriteElementString("LangVersion", project.LanguageVersion.ToString().Replace("CSharp", "").Replace('_', '.'));
 
 				w.WriteElementString("AssemblyName", module.Name);
@@ -122,7 +119,8 @@ namespace ICSharpCode.Decompiler.CSharp.ProjectDecompiler
 				w.WriteStartElement("PropertyGroup"); // platform-specific
 				w.WriteAttributeString("Condition", " '$(Platform)' == '" + platformName + "' ");
 				w.WriteElementString("PlatformTarget", platformName);
-				if (targetFramework.VersionNumber > 400 && platformName == "AnyCPU" && (module.Reader.PEHeaders.CorHeader.Flags & CorFlags.Prefers32Bit) == 0)
+				if (targetFramework.VersionNumber > 400 && platformName == "AnyCPU"
+					&& ((module as PEFile)?.Reader.PEHeaders.CorHeader.Flags & CorFlags.Prefers32Bit) == 0)
 				{
 					w.WriteElementString("Prefer32Bit", "false");
 				}
@@ -162,13 +160,18 @@ namespace ICSharpCode.Decompiler.CSharp.ProjectDecompiler
 				}
 				w.WriteEndElement(); // </ItemGroup> (References)
 
-				foreach (IGrouping<string, string> gr in from f in files group f.fileName by f.itemType into g orderby g.Key select g)
+				foreach (IGrouping<string, ProjectItemInfo> gr in files.GroupBy(f => f.ItemType).OrderBy(g => g.Key))
 				{
 					w.WriteStartElement("ItemGroup");
-					foreach (string file in gr.OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+					foreach (var item in gr.OrderBy(f => f.FileName, StringComparer.OrdinalIgnoreCase))
 					{
 						w.WriteStartElement(gr.Key);
-						w.WriteAttributeString("Include", file);
+						w.WriteAttributeString("Include", item.FileName);
+						if (item.AdditionalProperties != null)
+						{
+							foreach (var (key, value) in item.AdditionalProperties)
+								w.WriteAttributeString(key, value);
+						}
 						w.WriteEndElement();
 					}
 					w.WriteEndElement();

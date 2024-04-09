@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection.Metadata;
@@ -9,13 +8,10 @@ using System.Text;
 using System.Xml.Linq;
 
 using ICSharpCode.Decompiler.CSharp;
-using ICSharpCode.Decompiler.CSharp.OutputVisitor;
 using ICSharpCode.Decompiler.DebugInfo;
 using ICSharpCode.Decompiler.Metadata;
 using ICSharpCode.Decompiler.Tests.Helpers;
-using ICSharpCode.Decompiler.TypeSystem;
 
-using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.DiaSymReader.Tools;
 
 using NUnit.Framework;
@@ -48,6 +44,13 @@ namespace ICSharpCode.Decompiler.Tests
 		}
 
 		[Test]
+		[Ignore("Duplicate sequence points for local function")]
+		public void Members()
+		{
+			TestGeneratePdb();
+		}
+
+		[Test]
 		public void CustomPdbId()
 		{
 			// Generate a PDB for an assembly using a randomly-generated ID, then validate that the PDB uses the specified ID
@@ -67,8 +70,62 @@ namespace ICSharpCode.Decompiler.Tests
 				var metadataReader = MetadataReaderProvider.FromPortablePdbStream(pdbStream).GetMetadataReader();
 				var generatedPdbId = new BlobContentId(metadataReader.DebugMetadataHeader.Id);
 
-				Assert.AreEqual(expectedPdbId.Guid, generatedPdbId.Guid);
-				Assert.AreEqual(expectedPdbId.Stamp, generatedPdbId.Stamp);
+				Assert.That(generatedPdbId.Guid, Is.EqualTo(expectedPdbId.Guid));
+				Assert.That(generatedPdbId.Stamp, Is.EqualTo(expectedPdbId.Stamp));
+			}
+		}
+
+		[Test]
+		public void ProgressReporting()
+		{
+			// Generate a PDB for an assembly and validate that the progress reporter is called with reasonable values
+			(string peFileName, string pdbFileName) = CompileTestCase(nameof(ProgressReporting));
+
+			var moduleDefinition = new PEFile(peFileName);
+			var resolver = new UniversalAssemblyResolver(peFileName, false, moduleDefinition.Metadata.DetectTargetFrameworkId(), null, PEStreamOptions.PrefetchEntireImage);
+			var decompiler = new CSharpDecompiler(moduleDefinition, resolver, new DecompilerSettings());
+
+			var lastFilesWritten = 0;
+			var totalFiles = -1;
+
+			Action<DecompilationProgress> reportFunc = progress => {
+				if (totalFiles == -1)
+				{
+					// Initialize value on first call
+					totalFiles = progress.TotalUnits;
+				}
+
+				Assert.That(totalFiles, Is.EqualTo(progress.TotalUnits));
+				Assert.That(lastFilesWritten + 1, Is.EqualTo(progress.UnitsCompleted));
+
+				lastFilesWritten = progress.UnitsCompleted;
+			};
+
+			using (FileStream pdbStream = File.Open(Path.Combine(TestCasePath, nameof(ProgressReporting) + ".pdb"), FileMode.OpenOrCreate, FileAccess.ReadWrite))
+			{
+				pdbStream.SetLength(0);
+				PortablePdbWriter.WritePdb(moduleDefinition, decompiler, new DecompilerSettings(), pdbStream, noLogo: true, progress: new TestProgressReporter(reportFunc));
+
+				pdbStream.Position = 0;
+				var metadataReader = MetadataReaderProvider.FromPortablePdbStream(pdbStream).GetMetadataReader();
+				var generatedPdbId = new BlobContentId(metadataReader.DebugMetadataHeader.Id);
+			}
+
+			Assert.That(lastFilesWritten, Is.EqualTo(totalFiles));
+		}
+
+		private class TestProgressReporter : IProgress<DecompilationProgress>
+		{
+			private Action<DecompilationProgress> reportFunc;
+
+			public TestProgressReporter(Action<DecompilationProgress> reportFunc)
+			{
+				this.reportFunc = reportFunc;
+			}
+
+			public void Report(DecompilationProgress value)
+			{
+				reportFunc(value);
 			}
 		}
 
@@ -105,7 +162,7 @@ namespace ICSharpCode.Decompiler.Tests
 			ProcessXmlFile(expectedFileName);
 			string generatedFileName = Path.ChangeExtension(xmlFile, ".generated.xml");
 			ProcessXmlFile(generatedFileName);
-			Assert.AreEqual(Normalize(expectedFileName), Normalize(generatedFileName));
+			CodeAssert.AreEqual(Normalize(expectedFileName), Normalize(generatedFileName));
 		}
 
 		private (string peFileName, string pdbFileName) CompileTestCase(string testName)

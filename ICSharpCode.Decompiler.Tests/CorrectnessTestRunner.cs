@@ -1,4 +1,4 @@
-﻿// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
+// Copyright (c) AlphaSierraPapa for the SharpDevelop Team
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -46,7 +46,7 @@ namespace ICSharpCode.Decompiler.Tests
 				if (file.Extension == ".txt" || file.Extension == ".exe" || file.Extension == ".config")
 					continue;
 				var testName = Path.GetFileNameWithoutExtension(file.Name);
-				Assert.Contains(testName, testNames);
+				Assert.That(testNames, Has.Member(testName));
 			}
 		}
 
@@ -317,7 +317,7 @@ namespace ICSharpCode.Decompiler.Tests
 		public async Task StackTests()
 		{
 			// IL contains .corflags = 32BITREQUIRED
-			await RunIL("StackTests.il", asmOptions: AssemblerOptions.Force32Bit);
+			await RunIL("StackTests.il", CompilerOptions.Force32Bit, AssemblerOptions.Force32Bit);
 		}
 
 		[Test]
@@ -336,10 +336,6 @@ namespace ICSharpCode.Decompiler.Tests
 		[Test]
 		public async Task UnsafeCode([ValueSource(nameof(defaultOptions))] CompilerOptions options)
 		{
-			if (options.HasFlag(CompilerOptions.UseMcs2_6_4))
-			{
-				Assert.Ignore("Decompiler bug with mono!");
-			}
 			await RunCS(options: options);
 		}
 
@@ -398,10 +394,6 @@ namespace ICSharpCode.Decompiler.Tests
 		[Test]
 		public async Task MiniJSON([ValueSource(nameof(defaultOptions))] CompilerOptions options)
 		{
-			if (options.HasFlag(CompilerOptions.UseMcs2_6_4))
-			{
-				Assert.Ignore("Decompiler bug with mono!");
-			}
 			await RunCS(options: options);
 		}
 
@@ -443,9 +435,7 @@ namespace ICSharpCode.Decompiler.Tests
 				decompiledOutputFile = await Tester.CompileCSharp(decompiledCodeFile, options).ConfigureAwait(false);
 
 				await Tester.RunAndCompareOutput(testFileName, outputFile.PathToAssembly, decompiledOutputFile.PathToAssembly, decompiledCodeFile, (options & CompilerOptions.UseTestRunner) != 0, (options & CompilerOptions.Force32Bit) != 0);
-
 				Tester.RepeatOnIOError(() => File.Delete(decompiledCodeFile));
-				Tester.RepeatOnIOError(() => File.Delete(decompiledOutputFile.PathToAssembly));
 			}
 			finally
 			{
@@ -473,9 +463,7 @@ namespace ICSharpCode.Decompiler.Tests
 				decompiledOutputFile = await Tester.CompileCSharp(decompiledCodeFile, options).ConfigureAwait(false);
 
 				await Tester.RunAndCompareOutput(testFileName, outputFile.PathToAssembly, decompiledOutputFile.PathToAssembly, decompiledCodeFile, (options & CompilerOptions.UseTestRunner) != 0, (options & CompilerOptions.Force32Bit) != 0);
-
 				Tester.RepeatOnIOError(() => File.Delete(decompiledCodeFile));
-				Tester.RepeatOnIOError(() => File.Delete(decompiledOutputFile.PathToAssembly));
 			}
 			finally
 			{
@@ -491,6 +479,11 @@ namespace ICSharpCode.Decompiler.Tests
 			string outputFile = null;
 			CompilerResults decompiledOutputFile = null;
 
+			bool optionsForce32Bit = options.HasFlag(CompilerOptions.Force32Bit);
+			bool asmOptionsForce32Bit = asmOptions.HasFlag(AssemblerOptions.Force32Bit);
+
+			Assert.That(asmOptionsForce32Bit, Is.EqualTo(optionsForce32Bit), "Inconsistent architecture.");
+
 			try
 			{
 				options |= CompilerOptions.UseTestRunner;
@@ -499,9 +492,7 @@ namespace ICSharpCode.Decompiler.Tests
 				decompiledOutputFile = await Tester.CompileCSharp(decompiledCodeFile, options).ConfigureAwait(false);
 
 				await Tester.RunAndCompareOutput(testFileName, outputFile, decompiledOutputFile.PathToAssembly, decompiledCodeFile, (options & CompilerOptions.UseTestRunner) != 0, (options & CompilerOptions.Force32Bit) != 0).ConfigureAwait(false);
-
 				Tester.RepeatOnIOError(() => File.Delete(decompiledCodeFile));
-				Tester.RepeatOnIOError(() => File.Delete(decompiledOutputFile.PathToAssembly));
 			}
 			finally
 			{

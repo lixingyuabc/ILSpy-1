@@ -64,8 +64,17 @@ namespace ICSharpCode.Decompiler.TypeSystem.Implementation
 			var metadata = module.metadata;
 			var parameter = metadata.GetParameter(handle);
 
-			if (IsOptional && !HasConstantValueInSignature)
+			bool defaultValueAssignmentAllowed = ReferenceKind is ReferenceKind.None or ReferenceKind.In;
+
+			if (IsOptional && (!defaultValueAssignmentAllowed || !HasConstantValueInSignature))
+			{
 				b.Add(KnownAttribute.Optional);
+			}
+
+			if (!(IsDecimalConstant || !HasConstantValueInSignature) && (!defaultValueAssignmentAllowed || !IsOptional))
+			{
+				b.Add(KnownAttribute.DefaultParameterValue, KnownTypeCode.Object, GetConstantValue(throwOnInvalidMetadata: false));
+			}
 
 			if (!IsOut && !IsIn)
 			{
@@ -104,6 +113,23 @@ namespace ICSharpCode.Decompiler.TypeSystem.Implementation
 					return ReferenceKind.In;
 			}
 			return ReferenceKind.Ref;
+		}
+
+		public LifetimeAnnotation Lifetime {
+			get {
+				if ((module.TypeSystemOptions & TypeSystemOptions.ScopedRef) == 0)
+				{
+					return default;
+				}
+
+				var metadata = module.metadata;
+				var parameterDef = metadata.GetParameter(handle);
+				if (parameterDef.GetCustomAttributes().HasKnownAttribute(metadata, KnownAttribute.ScopedRef))
+				{
+					return new LifetimeAnnotation { ScopedRef = true };
+				}
+				return default;
+			}
 		}
 
 		public bool IsParams {

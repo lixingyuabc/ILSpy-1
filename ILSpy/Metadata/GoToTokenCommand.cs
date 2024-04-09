@@ -35,7 +35,7 @@ namespace ICSharpCode.ILSpy.Commands
 	{
 		public void Execute(TextViewContext context)
 		{
-			int token = GetSelectedToken(context.DataGrid, out PEFile module).Value;
+			int token = GetSelectedToken(context.DataGrid, out MetadataFile module).Value;
 			MainWindow.Instance.JumpToReference(new EntityReference(module, MetadataTokens.Handle(token), protocol: "metadata"));
 		}
 
@@ -49,7 +49,7 @@ namespace ICSharpCode.ILSpy.Commands
 			return context.DataGrid?.Name == "MetadataView" && GetSelectedToken(context.DataGrid, out _) != null;
 		}
 
-		private int? GetSelectedToken(DataGrid grid, out PEFile module)
+		private int? GetSelectedToken(DataGrid grid, out MetadataFile module)
 		{
 			module = null;
 			if (grid == null)
@@ -60,9 +60,9 @@ namespace ICSharpCode.ILSpy.Commands
 			Type type = cell.Item.GetType();
 			var property = type.GetProperty(cell.Column.Header.ToString());
 			var moduleField = type.GetField("module", BindingFlags.NonPublic | BindingFlags.Instance);
-			if (property == null || property.PropertyType != typeof(int) || !property.GetCustomAttributes(false).Any(a => a is StringFormatAttribute sf && sf.Format == "X8"))
+			if (property == null || property.PropertyType != typeof(int) || !property.GetCustomAttributes(false).Any(a => a is ColumnInfoAttribute { Kind: ColumnKind.Token } c))
 				return null;
-			module = (PEFile)moduleField.GetValue(cell.Item);
+			module = (MetadataFile)moduleField.GetValue(cell.Item);
 			return (int)property.GetValue(cell.Item);
 		}
 	}

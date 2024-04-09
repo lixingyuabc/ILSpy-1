@@ -156,10 +156,9 @@ namespace ICSharpCode.Decompiler.CSharp.Resolver
 				get { return SymbolKind.Operator; }
 			}
 
-			IEnumerable<IAttribute> IEntity.GetAttributes()
-			{
-				return EmptyList<IAttribute>.Instance;
-			}
+			IEnumerable<IAttribute> IEntity.GetAttributes() => EmptyList<IAttribute>.Instance;
+			bool IEntity.HasAttribute(KnownAttribute attribute) => false;
+			IAttribute? IEntity.GetAttribute(KnownAttribute attribute) => null;
 
 			Accessibility IEntity.Accessibility {
 				get { return Accessibility.Public; }
@@ -670,6 +669,27 @@ namespace ICSharpCode.Decompiler.CSharp.Resolver
 						new LambdaBinaryOperatorMethod<int, int>(this, (a, b) => a >> b),
 						new LambdaBinaryOperatorMethod<uint, int>(this, (a, b) => a >> b),
 						new LambdaBinaryOperatorMethod<long, int>(this, (a, b) => a >> b),
+						new LambdaBinaryOperatorMethod<ulong, int>(this, (a, b) => a >> b)
+					));
+				}
+			}
+		}
+
+		OperatorMethod[]? unsignedShiftRightOperators;
+
+		public OperatorMethod[] UnsignedShiftRightOperators {
+			get {
+				OperatorMethod[]? ops = LazyInit.VolatileRead(ref unsignedShiftRightOperators);
+				if (ops != null)
+				{
+					return ops;
+				}
+				else
+				{
+					return LazyInit.GetOrSet(ref unsignedShiftRightOperators, Lift(
+						new LambdaBinaryOperatorMethod<int, int>(this, (a, b) => (int)((uint)a >> b)),
+						new LambdaBinaryOperatorMethod<uint, int>(this, (a, b) => a >> b),
+						new LambdaBinaryOperatorMethod<long, int>(this, (a, b) => (long)((ulong)a >> b)),
 						new LambdaBinaryOperatorMethod<ulong, int>(this, (a, b) => a >> b)
 					));
 				}

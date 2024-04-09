@@ -23,17 +23,11 @@ using System.Linq;
 using System.Xml.Linq;
 
 using ICSharpCode.Decompiler.Metadata;
+using ICSharpCode.ILSpyX.FileLoaders;
+using ICSharpCode.ILSpyX.Settings;
 
 namespace ICSharpCode.ILSpyX
 {
-	public interface ISettingsProvider
-	{
-		XElement this[XName section] { get; }
-
-		void Update(Action<XElement> action);
-		ISettingsProvider Load();
-	}
-
 	/// <summary>
 	/// Manages the available assembly lists.
 	/// 
@@ -65,6 +59,8 @@ namespace ICSharpCode.ILSpyX
 		public bool UseDebugSymbols { get; set; }
 
 		public ObservableCollection<string> AssemblyLists { get; } = new ObservableCollection<string>();
+
+		public FileLoaderRegistry LoaderRegistry { get; } = new FileLoaderRegistry();
 
 		/// <summary>
 		/// Loads an assembly list from the ILSpySettings.

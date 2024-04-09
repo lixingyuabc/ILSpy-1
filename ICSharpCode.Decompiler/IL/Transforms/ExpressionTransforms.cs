@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2014-2017 Daniel Grunwald
+// Copyright (c) 2014-2017 Daniel Grunwald
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -274,6 +274,18 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 
 		protected internal override void VisitCall(Call inst)
 		{
+			if (NullableLiftingTransform.MatchGetValueOrDefault(inst, out var nullableValue, out var fallback)
+				&& SemanticHelper.IsPure(fallback.Flags))
+			{
+				context.Step("call Nullable{T}.GetValueOrDefault(a, b) -> a ?? b", inst);
+				var ldObj = new LdObj(nullableValue, inst.Method.DeclaringType);
+				var replacement = new NullCoalescingInstruction(NullCoalescingKind.NullableWithValueFallback, ldObj, fallback) {
+					UnderlyingResultType = fallback.ResultType
+				};
+				inst.ReplaceWith(replacement.WithILRange(inst));
+				replacement.AcceptVisitor(this);
+				return;
+			}
 			base.VisitCall(inst);
 			TransformAssignment.HandleCompoundAssign(inst, context);
 		}
@@ -286,12 +298,6 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 
 		protected internal override void VisitNewObj(NewObj inst)
 		{
-			if (TransformDecimalCtorToConstant(inst, out LdcDecimal decimalConstant))
-			{
-				context.Step("TransformDecimalCtorToConstant", inst);
-				inst.ReplaceWith(decimalConstant);
-				return;
-			}
 			Block block;
 			if (TransformSpanTCtorContainingStackAlloc(inst, out ILInstruction locallocSpan))
 			{
@@ -313,10 +319,10 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 					ILInlining.InlineIfPossible(block, stmt.ChildIndex, context);
 				return;
 			}
-			if (TransformArrayInitializers.TransformSpanTArrayInitialization(inst, context, out block))
+			if (TransformArrayInitializers.TransformSpanTArrayInitialization(inst, context, out var replacement))
 			{
 				context.Step("TransformSpanTArrayInitialization: single-dim", inst);
-				inst.ReplaceWith(block);
+				inst.ReplaceWith(replacement);
 				return;
 			}
 			if (TransformDelegateCtorLdVirtFtnToLdVirtDelegate(inst, out LdVirtDelegate ldVirtDelegate))
@@ -417,36 +423,6 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			if (elementCountInstr == null || !elementCountInstr.UnwrapConv(ConversionKind.ZeroExtend).Match(elementCountInstr2).Success)
 				return false;
 			return true;
-		}
-
-		bool TransformDecimalCtorToConstant(NewObj inst, out LdcDecimal result)
-		{
-			IType t = inst.Method.DeclaringType;
-			result = null;
-			if (!t.IsKnownType(KnownTypeCode.Decimal))
-				return false;
-			var args = inst.Arguments;
-			if (args.Count == 1)
-			{
-				int val;
-				if (args[0].MatchLdcI4(out val))
-				{
-					result = new LdcDecimal(val);
-					return true;
-				}
-			}
-			else if (args.Count == 5)
-			{
-				int lo, mid, hi, isNegative, scale;
-				if (args[0].MatchLdcI4(out lo) && args[1].MatchLdcI4(out mid) &&
-					args[2].MatchLdcI4(out hi) && args[3].MatchLdcI4(out isNegative) &&
-					args[4].MatchLdcI4(out scale))
-				{
-					result = new LdcDecimal(new decimal(lo, mid, hi, isNegative != 0, (byte)scale));
-					return true;
-				}
-			}
-			return false;
 		}
 
 		bool TransformDecimalFieldToConstant(LdObj inst, out LdcDecimal result)
@@ -550,7 +526,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 					return;
 				}
 			}
-			if (MatchInstruction.IsPatternMatch(inst.Condition, out _)
+			if (MatchInstruction.IsPatternMatch(inst.Condition, out _, context.Settings)
 				&& inst.TrueInst.MatchLdcI4(1) && inst.FalseInst.MatchLdcI4(0))
 			{
 				context.Step("match(x) ? true : false -> match(x)", inst);
@@ -813,7 +789,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 				case BinaryNumericOperator.ShiftLeft:
 				case BinaryNumericOperator.ShiftRight:
 					if (inst.Right.MatchBinaryNumericInstruction(BinaryNumericOperator.BitAnd, out var lhs, out var rhs)
-						&& rhs.MatchLdcI4(inst.ResultType == StackType.I8 ? 63 : 31))
+						&& MatchExpectedShiftSize(rhs))
 					{
 						// a << (b & 31) => a << b
 						context.Step("Combine bit.and into shift", inst);
@@ -830,6 +806,25 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 						}
 					}
 					break;
+			}
+
+			bool MatchExpectedShiftSize(ILInstruction rhs)
+			{
+				switch (inst.ResultType)
+				{
+					case StackType.I4:
+						return rhs.MatchLdcI4(31);
+					case StackType.I8:
+						return rhs.MatchLdcI4(63);
+					case StackType.I:
+						// sizeof(IntPtr) * 8 - 1
+						return rhs.MatchBinaryNumericInstruction(BinaryNumericOperator.Sub, out var mult, out var one)
+							&& mult.MatchBinaryNumericInstruction(BinaryNumericOperator.Mul, out var size, out var eight)
+							&& size.MatchSizeOf(out var sizeofType) && sizeofType.GetStackType() == StackType.I
+							&& eight.MatchLdcI4(8) && one.MatchLdcI4(1);
+					default:
+						return false;
+				}
 			}
 		}
 

@@ -66,8 +66,8 @@ namespace ICSharpCode.Decompiler.CSharp.ProjectDecompiler
 		public void Write(
 			TextWriter target,
 			IProjectInfoProvider project,
-			IEnumerable<(string itemType, string fileName)> files,
-			PEFile module)
+			IEnumerable<ProjectItemInfo> files,
+			MetadataFile module)
 		{
 			using (XmlTextWriter xmlWriter = new XmlTextWriter(target))
 			{
@@ -76,7 +76,7 @@ namespace ICSharpCode.Decompiler.CSharp.ProjectDecompiler
 			}
 		}
 
-		static void Write(XmlTextWriter xml, IProjectInfoProvider project, IEnumerable<(string itemType, string fileName)> files, PEFile module)
+		static void Write(XmlTextWriter xml, IProjectInfoProvider project, IEnumerable<ProjectItemInfo> files, MetadataFile module)
 		{
 			xml.WriteStartElement("Project");
 
@@ -105,18 +105,30 @@ namespace ICSharpCode.Decompiler.CSharp.ProjectDecompiler
 			}
 		}
 
-		static void WriteAssemblyInfo(XmlTextWriter xml, PEFile module, IProjectInfoProvider project, ProjectType projectType)
+		static void WriteAssemblyInfo(XmlTextWriter xml, MetadataFile module, IProjectInfoProvider project, ProjectType projectType)
 		{
 			xml.WriteElementString("AssemblyName", module.Name);
 
 			// Since we create AssemblyInfo.cs manually, we need to disable the auto-generation
 			xml.WriteElementString("GenerateAssemblyInfo", FalseString);
 
-			WriteOutputType(xml, module.Reader.PEHeaders.IsDll, module.Reader.PEHeaders.PEHeader.Subsystem, projectType);
+			string platformName;
+			CorFlags flags;
+			if (module is PEFile { Reader.PEHeaders: var headers } peFile)
+			{
+				WriteOutputType(xml, headers.IsDll, headers.PEHeader.Subsystem, projectType);
+				platformName = TargetServices.GetPlatformName(peFile);
+				flags = headers.CorHeader.Flags;
+			}
+			else
+			{
+				WriteOutputType(xml, isDll: true, Subsystem.Unknown, projectType);
+				platformName = AnyCpuString;
+				flags = 0;
+			}
 
 			WriteDesktopExtensions(xml, projectType);
 
-			string platformName = TargetServices.GetPlatformName(module);
 			var targetFramework = TargetServices.DetectTargetFramework(module);
 			if (targetFramework.Identifier == ".NETFramework" && targetFramework.VersionNumber == 200)
 				targetFramework = TargetServices.DetectTargetFrameworkNET20(module, project.AssemblyResolver, targetFramework);
@@ -134,7 +146,7 @@ namespace ICSharpCode.Decompiler.CSharp.ProjectDecompiler
 				xml.WriteElementString("PlatformTarget", platformName);
 			}
 
-			if (platformName == AnyCpuString && (module.Reader.PEHeaders.CorHeader.Flags & CorFlags.Prefers32Bit) != 0)
+			if (platformName == AnyCpuString && (flags & CorFlags.Prefers32Bit) != 0)
 			{
 				xml.WriteElementString("Prefer32Bit", TrueString);
 			}
@@ -188,27 +200,27 @@ namespace ICSharpCode.Decompiler.CSharp.ProjectDecompiler
 			}
 		}
 
-		static void WriteMiscellaneousPropertyGroup(XmlTextWriter xml, IEnumerable<(string itemType, string fileName)> files)
+		static void WriteMiscellaneousPropertyGroup(XmlTextWriter xml, IEnumerable<ProjectItemInfo> files)
 		{
-			var (itemType, fileName) = files.FirstOrDefault(t => t.itemType == "ApplicationIcon");
+			var (itemType, fileName) = files.FirstOrDefault(t => t.ItemType == "ApplicationIcon");
 			if (fileName != null)
 				xml.WriteElementString("ApplicationIcon", fileName);
 
-			(itemType, fileName) = files.FirstOrDefault(t => t.itemType == "ApplicationManifest");
+			(itemType, fileName) = files.FirstOrDefault(t => t.ItemType == "ApplicationManifest");
 			if (fileName != null)
 				xml.WriteElementString("ApplicationManifest", fileName);
 
-			if (files.Any(t => t.itemType == "EmbeddedResource"))
+			if (files.Any(t => t.ItemType == "EmbeddedResource"))
 				xml.WriteElementString("RootNamespace", string.Empty);
 			// TODO: We should add CustomToolNamespace for resources, otherwise we should add empty RootNamespace
 		}
 
-		static void WriteResources(XmlTextWriter xml, IEnumerable<(string itemType, string fileName)> files)
+		static void WriteResources(XmlTextWriter xml, IEnumerable<ProjectItemInfo> files)
 		{
 			// remove phase
-			foreach (var (itemType, fileName) in files.Where(t => t.itemType == "EmbeddedResource"))
+			foreach (var item in files.Where(t => t.ItemType == "EmbeddedResource"))
 			{
-				string buildAction = Path.GetExtension(fileName).ToUpperInvariant() switch {
+				string buildAction = Path.GetExtension(item.FileName).ToUpperInvariant() switch {
 					".CS" => "Compile",
 					".RESX" => "EmbeddedResource",
 					_ => "None"
@@ -217,23 +229,28 @@ namespace ICSharpCode.Decompiler.CSharp.ProjectDecompiler
 					continue;
 
 				xml.WriteStartElement(buildAction);
-				xml.WriteAttributeString("Remove", fileName);
+				xml.WriteAttributeString("Remove", item.FileName);
 				xml.WriteEndElement();
 			}
 
 			// include phase
-			foreach (var (itemType, fileName) in files.Where(t => t.itemType == "EmbeddedResource"))
+			foreach (var item in files.Where(t => t.ItemType == "EmbeddedResource"))
 			{
-				if (Path.GetExtension(fileName) == ".resx")
+				if (Path.GetExtension(item.FileName) == ".resx")
 					continue;
 
 				xml.WriteStartElement("EmbeddedResource");
-				xml.WriteAttributeString("Include", fileName);
+				xml.WriteAttributeString("Include", item.FileName);
+				if (item.AdditionalProperties != null)
+				{
+					foreach (var (key, value) in item.AdditionalProperties)
+						xml.WriteAttributeString(key, value);
+				}
 				xml.WriteEndElement();
 			}
 		}
 
-		static void WriteReferences(XmlTextWriter xml, PEFile module, IProjectInfoProvider project, ProjectType projectType)
+		static void WriteReferences(XmlTextWriter xml, MetadataFile module, IProjectInfoProvider project, ProjectType projectType)
 		{
 			bool isNetCoreApp = TargetServices.DetectTargetFramework(module).Identifier == ".NETCoreApp";
 			var targetPacks = new HashSet<string>();
@@ -287,7 +304,7 @@ namespace ICSharpCode.Decompiler.CSharp.ProjectDecompiler
 			}
 		}
 
-		static ProjectType GetProjectType(PEFile module)
+		static ProjectType GetProjectType(MetadataFile module)
 		{
 			foreach (var referenceName in module.AssemblyReferences.Select(r => r.Name))
 			{

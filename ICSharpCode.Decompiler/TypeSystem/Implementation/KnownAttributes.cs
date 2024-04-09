@@ -33,6 +33,7 @@ namespace ICSharpCode.Decompiler.TypeSystem
 		None,
 
 		CompilerGenerated,
+		CompilerFeatureRequired,
 		/// <summary>
 		/// Marks a method as extension method; or a class as containing extension methods.
 		/// </summary>
@@ -44,6 +45,7 @@ namespace ICSharpCode.Decompiler.TypeSystem
 		NullablePublicOnly,
 		Conditional,
 		Obsolete,
+		Embedded,
 		IsReadOnly,
 		SpecialName,
 		DebuggerHidden,
@@ -88,9 +90,11 @@ namespace ICSharpCode.Decompiler.TypeSystem
 		In,
 		Out,
 		Optional,
+		DefaultParameterValue,
 		CallerMemberName,
 		CallerFilePath,
 		CallerLineNumber,
+		ScopedRef,
 
 		// Type parameter attributes:
 		IsUnmanaged,
@@ -104,15 +108,19 @@ namespace ICSharpCode.Decompiler.TypeSystem
 		// C# 9 attributes:
 		NativeInteger,
 		PreserveBaseOverrides,
+
+		// C# 11 attributes:
+		RequiredAttribute,
 	}
 
-	static class KnownAttributes
+	public static class KnownAttributes
 	{
-		internal const int Count = (int)KnownAttribute.PreserveBaseOverrides + 1;
+		internal const int Count = (int)KnownAttribute.RequiredAttribute + 1;
 
 		static readonly TopLevelTypeName[] typeNames = new TopLevelTypeName[Count]{
 			default,
 			new TopLevelTypeName("System.Runtime.CompilerServices", nameof(CompilerGeneratedAttribute)),
+			new TopLevelTypeName("System.Runtime.CompilerServices", "CompilerFeatureRequiredAttribute"),
 			new TopLevelTypeName("System.Runtime.CompilerServices", nameof(ExtensionAttribute)),
 			new TopLevelTypeName("System.Runtime.CompilerServices", nameof(DynamicAttribute)),
 			new TopLevelTypeName("System.Runtime.CompilerServices", nameof(TupleElementNamesAttribute)),
@@ -121,6 +129,7 @@ namespace ICSharpCode.Decompiler.TypeSystem
 			new TopLevelTypeName("System.Runtime.CompilerServices", "NullablePublicOnlyAttribute"),
 			new TopLevelTypeName("System.Diagnostics", nameof(ConditionalAttribute)),
 			new TopLevelTypeName("System", nameof(ObsoleteAttribute)),
+			new TopLevelTypeName("Microsoft.CodeAnalysis", "EmbeddedAttribute"),
 			new TopLevelTypeName("System.Runtime.CompilerServices", "IsReadOnlyAttribute"),
 			new TopLevelTypeName("System.Runtime.CompilerServices", nameof(SpecialNameAttribute)),
 			new TopLevelTypeName("System.Diagnostics", nameof(DebuggerHiddenAttribute)),
@@ -159,9 +168,11 @@ namespace ICSharpCode.Decompiler.TypeSystem
 			new TopLevelTypeName("System.Runtime.InteropServices", nameof(InAttribute)),
 			new TopLevelTypeName("System.Runtime.InteropServices", nameof(OutAttribute)),
 			new TopLevelTypeName("System.Runtime.InteropServices", nameof(OptionalAttribute)),
+			new TopLevelTypeName("System.Runtime.InteropServices", nameof(DefaultParameterValueAttribute)),
 			new TopLevelTypeName("System.Runtime.CompilerServices", nameof(CallerMemberNameAttribute)),
 			new TopLevelTypeName("System.Runtime.CompilerServices", nameof(CallerFilePathAttribute)),
 			new TopLevelTypeName("System.Runtime.CompilerServices", nameof(CallerLineNumberAttribute)),
+			new TopLevelTypeName("System.Runtime.CompilerServices", "ScopedRefAttribute"),
 			// Type parameter attributes:
 			new TopLevelTypeName("System.Runtime.CompilerServices", "IsUnmanagedAttribute"),
 			// Marshalling attributes:
@@ -171,6 +182,8 @@ namespace ICSharpCode.Decompiler.TypeSystem
 			// C# 9 attributes:
 			new TopLevelTypeName("System.Runtime.CompilerServices", "NativeIntegerAttribute"),
 			new TopLevelTypeName("System.Runtime.CompilerServices", "PreserveBaseOverridesAttribute"),
+			// C# 11 attributes:
+			new TopLevelTypeName("System.Runtime.CompilerServices", "RequiredMemberAttribute"),
 		};
 
 		public static ref readonly TopLevelTypeName GetTypeName(this KnownAttribute attr)
@@ -194,6 +207,32 @@ namespace ICSharpCode.Decompiler.TypeSystem
 					return (KnownAttribute)i;
 			}
 			return KnownAttribute.None;
+		}
+
+		public static bool IsCustomAttribute(this KnownAttribute knownAttribute)
+		{
+			switch (knownAttribute)
+			{
+				case KnownAttribute.Serializable:
+				case KnownAttribute.ComImport:
+				case KnownAttribute.StructLayout:
+				case KnownAttribute.DllImport:
+				case KnownAttribute.PreserveSig:
+				case KnownAttribute.MethodImpl:
+				case KnownAttribute.FieldOffset:
+				case KnownAttribute.NonSerialized:
+				case KnownAttribute.MarshalAs:
+				case KnownAttribute.PermissionSet:
+				case KnownAttribute.Optional:
+				case KnownAttribute.DefaultParameterValue:
+				case KnownAttribute.In:
+				case KnownAttribute.Out:
+				case KnownAttribute.IndexerName:
+				case KnownAttribute.SpecialName:
+					return false;
+				default:
+					return true;
+			}
 		}
 	}
 }

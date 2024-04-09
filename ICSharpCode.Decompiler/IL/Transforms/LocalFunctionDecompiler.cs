@@ -80,7 +80,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			// Disable the transform if we are decompiling a display-class or local function method:
 			// This happens if a local function or display class is selected in the ILSpy tree view.
 			if (IsLocalFunctionMethod(function.Method, context) || IsLocalFunctionDisplayClass(
-					function.Method.ParentModule.PEFile,
+					function.Method.ParentModule.MetadataFile,
 					(TypeDefinitionHandle)function.Method.DeclaringTypeDefinition.MetadataToken,
 					context)
 				)
@@ -462,7 +462,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			else
 			{
 				var ilReader = context.CreateILReader();
-				var body = context.PEFile.Reader.GetMethodBody(methodDefinition.RelativeVirtualAddress);
+				var body = context.PEFile.GetMethodBody(methodDefinition.RelativeVirtualAddress);
 
 				function = ilReader.ReadIL((MethodDefinitionHandle)targetMethod.MetadataToken, body,
 					genericContext.GetValueOrDefault(), ILFunctionKind.LocalFunction,
@@ -493,7 +493,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			}
 			if (targetMethod.TypeParameters.Count > 0)
 			{
-				var lastParams = targetMethod.Parameters.Where(p => IsClosureParameter(p, this.resolveContext)).SelectMany(p => UnwrapByRef(p.Type).TypeArguments)
+				var lastParams = targetMethod.Parameters.Where(p => IsClosureParameter(p, this.resolveContext)).SelectMany(p => p.Type.UnwrapByRef().TypeArguments)
 					.Select(pt => (int?)targetMethod.TypeParameters.IndexOf(pt)).DefaultIfEmpty().Max();
 				if (lastParams != null && lastParams.GetValueOrDefault() + 1 > skipCount)
 					skipCount = lastParams.GetValueOrDefault() + 1;
@@ -562,15 +562,6 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			return type != null
 				&& type.Kind == TypeKind.Struct
 				&& TransformDisplayClassUsage.IsPotentialClosure(context.CurrentTypeDefinition, type);
-		}
-
-		static IType UnwrapByRef(IType type)
-		{
-			if (type is ByReferenceType byRef)
-			{
-				type = byRef.ElementType;
-			}
-			return type;
 		}
 
 		internal static ILInstruction GetStatement(ILInstruction inst)
@@ -733,7 +724,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 
 			ILInstruction GetClosureInitializer(ILVariable variable)
 			{
-				var type = UnwrapByRef(variable.Type).GetDefinition();
+				var type = variable.Type.UnwrapByRef().GetDefinition();
 				if (type == null)
 					return null;
 				if (variable.Kind == VariableKind.Parameter)
@@ -764,10 +755,10 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 		{
 			if (method.MetadataToken.IsNil)
 				return false;
-			return IsLocalFunctionMethod(method.ParentModule.PEFile, (MethodDefinitionHandle)method.MetadataToken, context);
+			return IsLocalFunctionMethod(method.ParentModule.MetadataFile, (MethodDefinitionHandle)method.MetadataToken, context);
 		}
 
-		public static bool IsLocalFunctionMethod(PEFile module, MethodDefinitionHandle methodHandle, ILTransformContext context = null)
+		public static bool IsLocalFunctionMethod(MetadataFile module, MethodDefinitionHandle methodHandle, ILTransformContext context = null)
 		{
 			if (context != null && context.PEFile != module)
 				return false;
@@ -785,7 +776,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			return true;
 		}
 
-		public static bool LocalFunctionNeedsAccessibilityChange(PEFile module, MethodDefinitionHandle methodHandle)
+		public static bool LocalFunctionNeedsAccessibilityChange(MetadataFile module, MethodDefinitionHandle methodHandle)
 		{
 			if (!IsLocalFunctionMethod(module, methodHandle))
 				return false;
@@ -806,7 +797,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			return false;
 		}
 
-		public static bool IsLocalFunctionDisplayClass(PEFile module, TypeDefinitionHandle typeHandle, ILTransformContext context = null)
+		public static bool IsLocalFunctionDisplayClass(MetadataFile module, TypeDefinitionHandle typeHandle, ILTransformContext context = null)
 		{
 			if (context != null && context.PEFile != module)
 				return false;

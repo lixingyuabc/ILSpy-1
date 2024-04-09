@@ -74,6 +74,16 @@ namespace ICSharpCode.Decompiler.Tests.TestCases.Pretty
 			Null
 		}
 
+		public enum KnownColor
+		{
+			DarkBlue,
+			DarkCyan,
+			DarkGoldenrod,
+			DarkGray,
+			DarkGreen,
+			DarkKhaki
+		}
+
 		private static char ch1767;
 
 #if !ROSLYN
@@ -1434,7 +1444,11 @@ namespace ICSharpCode.Decompiler.Tests.TestCases.Pretty
 
 		public static bool DoNotRemoveAssignmentBeforeSwitch(string x, out ConsoleKey key)
 		{
+#if NET40 || !ROSLYN
 			key = (ConsoleKey)0;
+#else
+			key = ConsoleKey.None;
+#endif
 			switch (x)
 			{
 				case "A":
@@ -1447,7 +1461,11 @@ namespace ICSharpCode.Decompiler.Tests.TestCases.Pretty
 					key = ConsoleKey.C;
 					break;
 			}
+#if NET40 || !ROSLYN
 			return key != (ConsoleKey)0;
+#else
+			return key != ConsoleKey.None;
+#endif
 		}
 
 		public static void Issue1767(string s)
@@ -1474,5 +1492,79 @@ namespace ICSharpCode.Decompiler.Tests.TestCases.Pretty
 					break;
 			}
 		}
+
+		public static void Issue2763(int value)
+		{
+			switch ((KnownColor)value)
+			{
+				case KnownColor.DarkBlue:
+					Console.WriteLine("DarkBlue");
+					break;
+				case KnownColor.DarkCyan:
+					Console.WriteLine("DarkCyan");
+					break;
+				case KnownColor.DarkGoldenrod:
+					Console.WriteLine("DarkGoldenrod");
+					break;
+				case KnownColor.DarkGray:
+					Console.WriteLine("DarkGray");
+					break;
+				case KnownColor.DarkGreen:
+					Console.WriteLine("DarkGreen");
+					break;
+				case KnownColor.DarkKhaki:
+					Console.WriteLine("DarkKhaki");
+					break;
+			}
+		}
+
+
+#if CS110 && NET70
+		public static string SwitchOverReadOnlySpanChar1(ReadOnlySpan<char> text)
+		{
+			Console.WriteLine("SwitchOverReadOnlySpanChar1:");
+			switch (text)
+			{
+				case "First case":
+					return "Text1";
+				case "Second case":
+				case "2nd case":
+					return "Text2";
+				case "Third case":
+					return "Text3";
+				case "Fourth case":
+					return "Text4";
+				case "Fifth case":
+					return "Text5";
+				case "Sixth case":
+					return "Text6";
+				default:
+					return "Default";
+			}
+		}
+
+		public static string SwitchOverSpanChar1(Span<char> text)
+		{
+			Console.WriteLine("SwitchOverSpanChar1:");
+			switch (text)
+			{
+				case "First case":
+					return "Text1";
+				case "Second case":
+				case "2nd case":
+					return "Text2";
+				case "Third case":
+					return "Text3";
+				case "Fourth case":
+					return "Text4";
+				case "Fifth case":
+					return "Text5";
+				case "Sixth case":
+					return "Text6";
+				default:
+					return "Default";
+			}
+		}
+#endif
 	}
 }

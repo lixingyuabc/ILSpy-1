@@ -25,6 +25,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection.Metadata;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -70,13 +71,14 @@ namespace ICSharpCode.ILSpy.TextView
 	/// Manages the TextEditor showing the decompiled code.
 	/// Contains all the threading logic that makes the decompiler work in the background.
 	/// </summary>
-	public sealed partial class DecompilerTextView : UserControl, IDisposable, IHaveState
+	public sealed partial class DecompilerTextView : UserControl, IDisposable, IHaveState, IProgress<DecompilationProgress>
 	{
 		readonly ReferenceElementGenerator referenceElementGenerator;
 		readonly UIElementGenerator uiElementGenerator;
 		readonly List<VisualLineElementGenerator?> activeCustomElementGenerators = new List<VisualLineElementGenerator?>();
 		readonly BracketHighlightRenderer bracketHighlightRenderer;
 		RichTextColorizer? activeRichTextColorizer;
+		RichTextModel? activeRichTextModel;
 		FoldingManager? foldingManager;
 		ILSpyTreeNode[]? decompiledNodes;
 		Uri? currentAddress;
@@ -110,9 +112,9 @@ namespace ICSharpCode.ILSpy.TextView
 			textEditor.TextArea.Caret.PositionChanged += HighlightBrackets;
 			textEditor.MouseMove += TextEditorMouseMove;
 			textEditor.MouseLeave += TextEditorMouseLeave;
-			textEditor.SetBinding(Control.FontFamilyProperty, new Binding { Source = DisplaySettingsPanel.CurrentDisplaySettings, Path = new PropertyPath("SelectedFont") });
-			textEditor.SetBinding(Control.FontSizeProperty, new Binding { Source = DisplaySettingsPanel.CurrentDisplaySettings, Path = new PropertyPath("SelectedFontSize") });
-			textEditor.SetBinding(TextEditor.WordWrapProperty, new Binding { Source = DisplaySettingsPanel.CurrentDisplaySettings, Path = new PropertyPath("EnableWordWrap") });
+			textEditor.SetBinding(Control.FontFamilyProperty, new Binding { Source = MainWindow.Instance.CurrentDisplaySettings, Path = new PropertyPath("SelectedFont") });
+			textEditor.SetBinding(Control.FontSizeProperty, new Binding { Source = MainWindow.Instance.CurrentDisplaySettings, Path = new PropertyPath("SelectedFontSize") });
+			textEditor.SetBinding(TextEditor.WordWrapProperty, new Binding { Source = MainWindow.Instance.CurrentDisplaySettings, Path = new PropertyPath("EnableWordWrap") });
 
 			// disable Tab editing command (useless for read-only editor); allow using tab for focus navigation instead
 			RemoveEditCommand(EditingCommands.TabForward);
@@ -122,11 +124,12 @@ namespace ICSharpCode.ILSpy.TextView
 			textEditor.TextArea.TextView.BackgroundRenderers.Add(textMarkerService);
 			textEditor.TextArea.TextView.LineTransformers.Add(textMarkerService);
 			textEditor.ShowLineNumbers = true;
-			DisplaySettingsPanel.CurrentDisplaySettings.PropertyChanged += CurrentDisplaySettings_PropertyChanged;
+			MainWindow.Instance.CurrentDisplaySettings.PropertyChanged += CurrentDisplaySettings_PropertyChanged;
 
 			// SearchPanel
 			SearchPanel searchPanel = SearchPanel.Install(textEditor.TextArea);
 			searchPanel.RegisterCommands(Application.Current.MainWindow.CommandBindings);
+			searchPanel.SetResourceReference(SearchPanel.MarkerBrushProperty, ResourceKeys.SearchResultBackgroundBrush);
 			searchPanel.Loaded += (_, _) => {
 				// HACK: fix the hardcoded but misaligned margin of the search text box.
 				var textBox = searchPanel.VisualDescendants().OfType<TextBox>().FirstOrDefault();
@@ -139,13 +142,13 @@ namespace ICSharpCode.ILSpy.TextView
 			ShowLineMargin();
 			SetHighlightCurrentLine();
 
-			// add marker service & margin
-			textEditor.TextArea.TextView.BackgroundRenderers.Add(textMarkerService);
-			textEditor.TextArea.TextView.LineTransformers.Add(textMarkerService);
-
 			ContextMenuProvider.Add(this);
 
 			textEditor.TextArea.TextView.SetResourceReference(ICSharpCode.AvalonEdit.Rendering.TextView.LinkTextForegroundBrushProperty, ResourceKeys.LinkTextForegroundBrush);
+			textEditor.TextArea.TextView.SetResourceReference(ICSharpCode.AvalonEdit.Rendering.TextView.CurrentLineBackgroundProperty, ResourceKeys.CurrentLineBackgroundBrush);
+			textEditor.TextArea.TextView.SetResourceReference(ICSharpCode.AvalonEdit.Rendering.TextView.CurrentLineBorderProperty, ResourceKeys.CurrentLineBorderPen);
+
+			DataObject.AddSettingDataHandler(textEditor.TextArea, OnSettingData);
 
 			this.DataContextChanged += DecompilerTextView_DataContextChanged;
 		}
@@ -174,11 +177,11 @@ namespace ICSharpCode.ILSpy.TextView
 
 		void CurrentDisplaySettings_PropertyChanged(object? sender, PropertyChangedEventArgs e)
 		{
-			if (e.PropertyName == nameof(DisplaySettings.ShowLineNumbers))
+			if (e.PropertyName == nameof(DisplaySettingsViewModel.ShowLineNumbers))
 			{
 				ShowLineMargin();
 			}
-			else if (e.PropertyName == nameof(DisplaySettings.HighlightCurrentLine))
+			else if (e.PropertyName == nameof(DisplaySettingsViewModel.HighlightCurrentLine))
 			{
 				SetHighlightCurrentLine();
 			}
@@ -190,14 +193,14 @@ namespace ICSharpCode.ILSpy.TextView
 			{
 				if (margin is LineNumberMargin || margin is System.Windows.Shapes.Line)
 				{
-					margin.Visibility = DisplaySettingsPanel.CurrentDisplaySettings.ShowLineNumbers ? Visibility.Visible : Visibility.Collapsed;
+					margin.Visibility = MainWindow.Instance.CurrentDisplaySettings.ShowLineNumbers ? Visibility.Visible : Visibility.Collapsed;
 				}
 			}
 		}
 
 		void SetHighlightCurrentLine()
 		{
-			textEditor.Options.HighlightCurrentLine = DisplaySettingsPanel.CurrentDisplaySettings.HighlightCurrentLine;
+			textEditor.Options.HighlightCurrentLine = MainWindow.Instance.CurrentDisplaySettings.HighlightCurrentLine;
 		}
 
 		#endregion
@@ -231,6 +234,8 @@ namespace ICSharpCode.ILSpy.TextView
 				{
 					var popupPosition = GetPopupPosition(e);
 					popupToolTip.Closed += ToolTipClosed;
+					popupToolTip.Placement = PlacementMode.Relative;
+					popupToolTip.PlacementTarget = this;
 					popupToolTip.HorizontalOffset = popupPosition.X;
 					popupToolTip.VerticalOffset = popupPosition.Y;
 					popupToolTip.StaysOpen = true;  // We will close it ourselves
@@ -282,23 +287,19 @@ namespace ICSharpCode.ILSpy.TextView
 		Point GetPopupPosition(MouseEventArgs mouseArgs)
 		{
 			Point mousePos = mouseArgs.GetPosition(this);
-			Point positionInPixels;
 			// align Popup with line bottom
 			TextViewPosition? logicalPos = textEditor.GetPositionFromPoint(mousePos);
 			if (logicalPos.HasValue)
 			{
 				var textView = textEditor.TextArea.TextView;
-				positionInPixels =
-					textView.PointToScreen(
-						textView.GetVisualPosition(logicalPos.Value, VisualYPosition.LineBottom) - textView.ScrollOffset);
-				positionInPixels.X -= 4;
+				return textView.GetVisualPosition(logicalPos.Value, VisualYPosition.LineBottom)
+					- textView.ScrollOffset
+					+ new Vector(-4, 0);
 			}
 			else
 			{
-				positionInPixels = PointToScreen(mousePos + new Vector(-4, 6));
+				return mousePos + new Vector(-4, 6);
 			}
-			// use device independent units, because Popup Left/Top are in independent units
-			return positionInPixels.TransformFromDevice(this);
 		}
 
 		void TextViewMouseHoverStopped(object sender, MouseEventArgs e)
@@ -441,12 +442,17 @@ namespace ICSharpCode.ILSpy.TextView
 			Language currentLanguage = MainWindow.Instance.CurrentLanguage;
 			DocumentationUIBuilder renderer = new DocumentationUIBuilder(new CSharpAmbience(), currentLanguage.SyntaxHighlighting);
 			RichText richText = currentLanguage.GetRichTextTooltip(resolved);
+			if (richText == null)
+			{
+				return null;
+			}
+
 			renderer.AddSignatureBlock(richText.Text, richText.ToRichTextModel());
 			try
 			{
-				if (resolved.ParentModule == null || resolved.ParentModule.PEFile == null)
+				if (resolved.ParentModule == null || resolved.ParentModule.MetadataFile == null)
 					return null;
-				var docProvider = XmlDocLoader.LoadDocumentation(resolved.ParentModule.PEFile);
+				var docProvider = XmlDocLoader.LoadDocumentation(resolved.ParentModule.MetadataFile);
 				if (docProvider != null)
 				{
 					string documentation = docProvider.GetDocumentation(resolved.GetIdString());
@@ -475,7 +481,7 @@ namespace ICSharpCode.ILSpy.TextView
 			public FlowDocumentTooltip(FlowDocument document)
 			{
 				TextOptions.SetTextFormattingMode(this, TextFormattingMode.Display);
-				double fontSize = DisplaySettingsPanel.CurrentDisplaySettings.SelectedFontSize;
+				double fontSize = MainWindow.Instance.CurrentDisplaySettings.SelectedFontSize;
 				viewer = new FlowDocumentScrollViewer() {
 					Width = document.MinPageWidth + fontSize * 5,
 					MaxWidth = MainWindow.Instance.ActualWidth
@@ -522,7 +528,7 @@ namespace ICSharpCode.ILSpy.TextView
 		#region Highlight brackets
 		void HighlightBrackets(object? sender, EventArgs e)
 		{
-			if (DisplaySettingsPanel.CurrentDisplaySettings.HighlightMatchingBraces)
+			if (MainWindow.Instance.CurrentDisplaySettings.HighlightMatchingBraces)
 			{
 				var result = MainWindow.Instance.CurrentLanguage.BracketSearcher.SearchBracket(textEditor.Document, textEditor.CaretOffset);
 				bracketHighlightRenderer.SetHighlight(result);
@@ -535,18 +541,26 @@ namespace ICSharpCode.ILSpy.TextView
 		#endregion
 
 		#region RunWithCancellation
-		/// <summary>
-		/// Switches the GUI into "waiting" mode, then calls <paramref name="taskCreation"/> to create
-		/// the task.
-		/// When the task completes without being cancelled, the <paramref name="taskCompleted"/>
-		/// callback is called on the GUI thread.
-		/// When the task is cancelled before completing, the callback is not called; and any result
-		/// of the task (including exceptions) are ignored.
-		/// </summary>
-		[Obsolete("RunWithCancellation(taskCreation).ContinueWith(taskCompleted) instead")]
-		public void RunWithCancellation<T>(Func<CancellationToken, Task<T>> taskCreation, Action<Task<T>> taskCompleted)
+		public void Report(DecompilationProgress value)
 		{
-			RunWithCancellation(taskCreation).ContinueWith(taskCompleted, CancellationToken.None, TaskContinuationOptions.NotOnCanceled, TaskScheduler.FromCurrentSynchronizationContext());
+			double v = (double)value.UnitsCompleted / value.TotalUnits;
+			Dispatcher.BeginInvoke(DispatcherPriority.Normal, delegate {
+				progressBar.IsIndeterminate = !double.IsFinite(v);
+				progressBar.Value = v * 100.0;
+				progressTitle.Text = !string.IsNullOrWhiteSpace(value.Title) ? value.Title : Properties.Resources.Decompiling;
+				progressText.Text = value.Status;
+				progressText.Visibility = !string.IsNullOrWhiteSpace(progressText.Text) ? Visibility.Visible : Visibility.Collapsed;
+				var taskBar = MainWindow.Instance.TaskbarItemInfo;
+				if (taskBar != null)
+				{
+					taskBar.ProgressState = System.Windows.Shell.TaskbarItemProgressState.Normal;
+					taskBar.ProgressValue = v;
+				}
+				if (this.DataContext is TabPageModel model)
+				{
+					model.Title = progressTitle.Text;
+				}
+			});
 		}
 
 		/// <summary>
@@ -561,7 +575,10 @@ namespace ICSharpCode.ILSpy.TextView
 				waitAdorner.Visibility = Visibility.Visible;
 				// Work around a WPF bug by setting IsIndeterminate only while the progress bar is visible.
 				// https://github.com/icsharpcode/ILSpy/issues/593
+				progressTitle.Text = Properties.Resources.Decompiling;
 				progressBar.IsIndeterminate = true;
+				progressText.Text = null;
+				progressText.Visibility = Visibility.Collapsed;
 				waitAdorner.BeginAnimation(OpacityProperty, new DoubleAnimation(0, 1, new Duration(TimeSpan.FromSeconds(0.5)), FillBehavior.Stop));
 				var taskBar = MainWindow.Instance.TaskbarItemInfo;
 				if (taskBar != null)
@@ -600,6 +617,8 @@ namespace ICSharpCode.ILSpy.TextView
 						currentCancellationTokenSource = null;
 						waitAdorner.Visibility = Visibility.Collapsed;
 						progressBar.IsIndeterminate = false;
+						progressText.Text = null;
+						progressText.Visibility = Visibility.Collapsed;
 						var taskBar = MainWindow.Instance.TaskbarItemInfo;
 						if (taskBar != null)
 						{
@@ -699,10 +718,12 @@ namespace ICSharpCode.ILSpy.TextView
 			textEditor.SyntaxHighlighting = highlighting;
 			textEditor.Options.EnableEmailHyperlinks = textOutput.EnableHyperlinks;
 			textEditor.Options.EnableHyperlinks = textOutput.EnableHyperlinks;
+			activeRichTextModel = null;
 			if (activeRichTextColorizer != null)
 				textEditor.TextArea.TextView.LineTransformers.Remove(activeRichTextColorizer);
 			if (textOutput.HighlightingModel != null)
 			{
+				activeRichTextModel = textOutput.HighlightingModel;
 				activeRichTextColorizer = new RichTextColorizer(textOutput.HighlightingModel);
 				textEditor.TextArea.TextView.LineTransformers.Insert(highlighting == null ? 0 : 1, activeRichTextColorizer);
 			}
@@ -729,7 +750,7 @@ namespace ICSharpCode.ILSpy.TextView
 			{
 				if (state != null)
 				{
-					state.RestoreFoldings(textOutput.Foldings, DisplaySettingsPanel.CurrentDisplaySettings.ExpandMemberDefinitions);
+					state.RestoreFoldings(textOutput.Foldings, MainWindow.Instance.CurrentDisplaySettings.ExpandMemberDefinitions);
 					textEditor.ScrollToVerticalOffset(state.VerticalOffset);
 					textEditor.ScrollToHorizontalOffset(state.HorizontalOffset);
 				}
@@ -753,7 +774,7 @@ namespace ICSharpCode.ILSpy.TextView
 			}
 			currentAddress = textOutput.Address;
 			currentTitle = textOutput.Title;
-			expandMemberDefinitions = DisplaySettingsPanel.CurrentDisplaySettings.ExpandMemberDefinitions;
+			expandMemberDefinitions = MainWindow.Instance.CurrentDisplaySettings.ExpandMemberDefinitions;
 		}
 		#endregion
 
@@ -823,6 +844,7 @@ namespace ICSharpCode.ILSpy.TextView
 			return RunWithCancellation(
 				delegate (CancellationToken ct) { // creation of the background task
 					context.Options.CancellationToken = ct;
+					context.Options.Progress = this;
 					decompiledNodes = context.TreeNodes;
 					return DecompileAsync(context, outputLengthLimit);
 				})
@@ -1086,6 +1108,7 @@ namespace ICSharpCode.ILSpy.TextView
 					{
 						bool originalProjectFormatSetting = context.Options.DecompilerSettings.UseSdkStyleProjectFormat;
 						context.Options.EscapeInvalidIdentifiers = true;
+						context.Options.Progress = this;
 						AvalonEditTextOutput output = new AvalonEditTextOutput {
 							EnableHyperlinks = true,
 							Title = string.Join(", ", context.TreeNodes.Select(n => n.Text))
@@ -1159,6 +1182,58 @@ namespace ICSharpCode.ILSpy.TextView
 		}
 		#endregion
 
+		#region Clipboard
+		private void OnSettingData(object sender, DataObjectSettingDataEventArgs e)
+		{
+			if (e.Format == DataFormats.Html && e.DataObject is DataObject dataObject)
+			{
+				e.CancelCommand();
+				HtmlClipboard.SetHtml(dataObject, CreateHtmlFragmentFromSelection());
+			}
+		}
+
+		private string CreateHtmlFragmentFromSelection()
+		{
+			var options = new HtmlOptions(textEditor.TextArea.Options);
+			var highlighter = textEditor.TextArea.GetService(typeof(IHighlighter)) as IHighlighter;
+			var html = new StringBuilder();
+
+			foreach (var segment in textEditor.TextArea.Selection.Segments)
+			{
+				var line = textEditor.Document.GetLineByOffset(segment.StartOffset);
+
+				while (line != null && line.Offset < segment.EndOffset)
+				{
+					if (html.Length > 0)
+						html.AppendLine("<br>");
+
+					var s = GetOverlap(segment, line);
+					var highlightedLine = highlighter?.HighlightLine(line.LineNumber) ?? new HighlightedLine(textEditor.Document, line);
+
+					if (activeRichTextModel is not null)
+					{
+						var richTextHighlightedLine = new HighlightedLine(textEditor.Document, line);
+						foreach (HighlightedSection richTextSection in activeRichTextModel.GetHighlightedSections(s.Offset, s.Length))
+							richTextHighlightedLine.Sections.Add(richTextSection);
+						highlightedLine.MergeWith(richTextHighlightedLine);
+					}
+
+					html.Append(highlightedLine.ToHtml(s.Offset, s.Offset + s.Length, options));
+					line = line.NextLine;
+				}
+			}
+
+			return html.ToString();
+
+			static (int Offset, int Length) GetOverlap(ISegment segment1, ISegment segment2)
+			{
+				int start = Math.Max(segment1.Offset, segment2.Offset);
+				int end = Math.Min(segment1.EndOffset, segment2.EndOffset);
+				return (start, end - start);
+			}
+		}
+		#endregion
+
 		internal ReferenceSegment? GetReferenceSegmentAtMousePosition()
 		{
 			if (referenceElementGenerator.References == null)
@@ -1210,7 +1285,7 @@ namespace ICSharpCode.ILSpy.TextView
 
 		public void Dispose()
 		{
-			DisplaySettingsPanel.CurrentDisplaySettings.PropertyChanged -= CurrentDisplaySettings_PropertyChanged;
+			MainWindow.Instance.CurrentDisplaySettings.PropertyChanged -= CurrentDisplaySettings_PropertyChanged;
 		}
 
 		#region Unfold
@@ -1346,15 +1421,8 @@ namespace ICSharpCode.ILSpy.TextView
 			string[] extensions,
 			string resourceName)
 		{
-			if (ThemeManager.Current.IsDarkMode)
-			{
-				resourceName += "-Dark";
-			}
-
-			resourceName += ".xshd";
-
 			Stream? resourceStream = typeof(DecompilerTextView).Assembly
-				.GetManifestResourceStream(typeof(DecompilerTextView), resourceName);
+				.GetManifestResourceStream(typeof(DecompilerTextView), resourceName + ".xshd");
 
 			if (resourceStream != null)
 			{
@@ -1364,7 +1432,9 @@ namespace ICSharpCode.ILSpy.TextView
 						using (resourceStream)
 						using (XmlTextReader reader = new XmlTextReader(resourceStream))
 						{
-							return HighlightingLoader.Load(reader, manager);
+							var highlightingDefinition = HighlightingLoader.Load(reader, manager);
+							ThemeManager.Current.ApplyHighlightingColors(highlightingDefinition);
+							return highlightingDefinition;
 						}
 					});
 			}

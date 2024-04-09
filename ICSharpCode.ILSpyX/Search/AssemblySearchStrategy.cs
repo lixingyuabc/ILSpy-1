@@ -15,7 +15,6 @@
 // FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
 // OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 // DEALINGS IN THE SOFTWARE.
-using System;
 using System.Collections.Concurrent;
 using System.IO;
 using System.Threading;
@@ -35,25 +34,33 @@ namespace ICSharpCode.ILSpyX.Search
 			this.searchKind = searchKind;
 		}
 
-		public override void Search(PEFile module, CancellationToken cancellationToken)
+		public override void Search(MetadataFile module, CancellationToken cancellationToken)
 		{
 			cancellationToken.ThrowIfCancellationRequested();
 
 			if (searchKind == AssemblySearchKind.NameOrFileName)
 			{
-				string localName = GetNameToMatch(module, AssemblySearchKind.Name);
-				string fileName = Path.GetFileName(GetNameToMatch(module, AssemblySearchKind.FilePath));
-				if (IsMatch(localName) || IsMatch(fileName))
+				string? localName = GetNameToMatch(module, AssemblySearchKind.Name);
+				string? filePath = GetNameToMatch(module, AssemblySearchKind.FilePath);
+				if (localName != null && IsMatch(localName))
+				{
 					OnFoundResult(module);
+				}
+				else if (filePath != null)
+				{
+					string fileName = Path.GetFileName(filePath);
+					if (IsMatch(fileName))
+						OnFoundResult(module);
+				}
 				return;
 			}
 
-			string name = GetNameToMatch(module, searchKind);
-			if (IsMatch(name))
+			string? name = GetNameToMatch(module, searchKind);
+			if (name != null && IsMatch(name))
 				OnFoundResult(module);
 		}
 
-		string GetNameToMatch(PEFile module, AssemblySearchKind kind)
+		string? GetNameToMatch(MetadataFile module, AssemblySearchKind kind)
 		{
 			switch (kind)
 			{
@@ -90,7 +97,7 @@ namespace ICSharpCode.ILSpyX.Search
 			return null;
 		}
 
-		void OnFoundResult(PEFile module)
+		void OnFoundResult(MetadataFile module)
 		{
 			OnFoundResult(searchRequest.SearchResultFactory.Create(module));
 		}

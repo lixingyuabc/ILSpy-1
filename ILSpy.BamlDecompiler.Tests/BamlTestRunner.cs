@@ -23,6 +23,7 @@ using System.Linq;
 using System.Threading;
 using System.Xml.Linq;
 
+using ICSharpCode.BamlDecompiler;
 using ICSharpCode.Decompiler.Metadata;
 using ICSharpCode.Decompiler.Tests.Helpers;
 using ICSharpCode.Decompiler.Util;
@@ -154,6 +155,12 @@ namespace ILSpy.BamlDecompiler.Tests
 			RunTest("cases/issue2116");
 		}
 
+		[Test]
+		public void ReadonlyProperty()
+		{
+			RunTest("cases/readonlyproperty");
+		}
+
 		#region RunTest
 		void RunTest(string name)
 		{
@@ -173,7 +180,7 @@ namespace ILSpy.BamlDecompiler.Tests
 				resolver.AddSearchDirectory(Path.GetDirectoryName(asmPath));
 				var res = module.Resources.First();
 				Stream bamlStream = LoadBaml(res, name + ".baml");
-				Assert.IsNotNull(bamlStream);
+				Assert.That(bamlStream, Is.Not.Null);
 
 				BamlDecompilerTypeSystem typeSystem = new BamlDecompilerTypeSystem(module, resolver);
 				var decompiler = new XamlDecompiler(typeSystem, new BamlDecompilerSettings());

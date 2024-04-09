@@ -36,7 +36,11 @@ namespace ICSharpCode.Decompiler.Tests.TestCases.Correctness
 			Issue1747();
 			CallAmbiguousOutParam();
 			CallWithInParam();
+#if CS90
+			NativeIntTests(new IntPtr(1), 2);
+#endif
 			Issue2444.M2();
+			Issue2741.B.Test(new Issue2741.C());
 		}
 
 		#region ConstructorTest
@@ -336,6 +340,34 @@ namespace ICSharpCode.Decompiler.Tests.TestCases.Correctness
 #endif
 		#endregion
 
+#if CS90
+		static void NativeIntTests(IntPtr i1, nint i2)
+		{
+			Console.WriteLine("NativeIntTests(i1):");
+			ObjectOrLong((object)i1);
+			ObjectOrLong((long)i1);
+			Console.WriteLine("NativeIntTests(i2):");
+			ObjectOrLong((object)i2);
+			ObjectOrLong((long)i2);
+			Console.WriteLine("NativeIntTests(new IntPtr):");
+			ObjectOrLong((object)new IntPtr(3));
+			ObjectOrLong((long)new IntPtr(3));
+			Console.WriteLine("NativeIntTests(IntPtr.Zero):");
+			ObjectOrLong((object)IntPtr.Zero);
+			ObjectOrLong((long)IntPtr.Zero);
+		}
+
+		static void ObjectOrLong(object o)
+		{
+			Console.WriteLine("object " + o);
+		}
+
+		static void ObjectOrLong(long l)
+		{
+			Console.WriteLine("long " + l);
+		}
+#endif
+
 		#region #2444
 		public struct Issue2444
 		{
@@ -364,6 +396,64 @@ namespace ICSharpCode.Decompiler.Tests.TestCases.Correctness
 				Console.WriteLine("#2444: before M1");
 				M1((X)null);
 				Console.WriteLine("#2444: after M1");
+			}
+		}
+
+		public class Issue2741
+		{
+			public class B
+			{
+				private void M()
+				{
+					Console.WriteLine("B::M");
+				}
+
+				protected void M2()
+				{
+					Console.WriteLine("B::M2");
+				}
+
+				protected void M3()
+				{
+					Console.WriteLine("B::M3");
+				}
+
+				protected void M4()
+				{
+					Console.WriteLine("B::M4");
+				}
+
+				public static void Test(C c)
+				{
+					((B)c).M();
+					((B)c).M2();
+					c.Test();
+				}
+			}
+
+			public class C : B
+			{
+				public void M()
+				{
+					Console.WriteLine("C::M");
+				}
+
+				public new void M2()
+				{
+					Console.WriteLine("C::M2");
+				}
+
+				public new void M3()
+				{
+					Console.WriteLine("C::M3");
+				}
+
+				public void Test()
+				{
+					M3();
+					base.M3();
+					M4();
+				}
 			}
 		}
 		#endregion

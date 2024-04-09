@@ -1,10 +1,13 @@
 ﻿using System;
 using System.Collections.Immutable;
+using System.IO;
+using System.IO.MemoryMappedFiles;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
 
+using ICSharpCode.Decompiler.Metadata;
 using ICSharpCode.Decompiler.TypeSystem;
 using ICSharpCode.Decompiler.Util;
 
@@ -239,29 +242,37 @@ namespace ICSharpCode.Decompiler
 			if (handle.IsNil)
 				return false;
 			StringHandle nameHandle, namespaceHandle;
-			switch (handle.Kind)
+			try
 			{
-				case HandleKind.TypeReference:
-					var tr = reader.GetTypeReference((TypeReferenceHandle)handle);
-					// ignore exported and nested types
-					if (tr.ResolutionScope.IsNil || tr.ResolutionScope.Kind == HandleKind.TypeReference)
+				switch (handle.Kind)
+				{
+					case HandleKind.TypeReference:
+						var tr = reader.GetTypeReference((TypeReferenceHandle)handle);
+						// ignore exported and nested types
+						if (tr.ResolutionScope.IsNil || tr.ResolutionScope.Kind == HandleKind.TypeReference)
+							return false;
+						nameHandle = tr.Name;
+						namespaceHandle = tr.Namespace;
+						break;
+					case HandleKind.TypeDefinition:
+						var td = reader.GetTypeDefinition((TypeDefinitionHandle)handle);
+						if (td.IsNested)
+							return false;
+						nameHandle = td.Name;
+						namespaceHandle = td.Namespace;
+						break;
+					case HandleKind.TypeSpecification:
+						var ts = reader.GetTypeSpecification((TypeSpecificationHandle)handle);
+						var blob = reader.GetBlobReader(ts.Signature);
+						return SignatureIsKnownType(reader, knownType, ref blob);
+					default:
 						return false;
-					nameHandle = tr.Name;
-					namespaceHandle = tr.Namespace;
-					break;
-				case HandleKind.TypeDefinition:
-					var td = reader.GetTypeDefinition((TypeDefinitionHandle)handle);
-					if (td.IsNested)
-						return false;
-					nameHandle = td.Name;
-					namespaceHandle = td.Namespace;
-					break;
-				case HandleKind.TypeSpecification:
-					var ts = reader.GetTypeSpecification((TypeSpecificationHandle)handle);
-					var blob = reader.GetBlobReader(ts.Signature);
-					return SignatureIsKnownType(reader, knownType, ref blob);
-				default:
-					return false;
+				}
+			}
+			catch (BadImageFormatException)
+			{
+				// ignore bad metadata when trying to resolve ResolutionScope et al.
+				return false;
 			}
 			if (knownType.TypeParameterCount == 0)
 			{
@@ -616,7 +627,7 @@ namespace ICSharpCode.Decompiler
 		}
 		#endregion
 
-		public static unsafe BlobReader GetInitialValue(this FieldDefinition field, PEReader pefile,
+		public static unsafe BlobReader GetInitialValue(this FieldDefinition field, MetadataFile pefile,
 			ICompilation typeSystem)
 		{
 			if (!field.HasFlag(FieldAttributes.HasFieldRVA))
@@ -642,10 +653,10 @@ namespace ICSharpCode.Decompiler
 			public FieldValueSizeDecoder(ICompilation typeSystem = null)
 			{
 				this.module = (MetadataModule)typeSystem?.MainModule;
-				if (module == null)
+				if (module?.MetadataFile is not PEFile pefile)
 					this.pointerSize = IntPtr.Size;
 				else
-					this.pointerSize = module.PEFile.Reader.PEHeaders.PEHeader.Magic == PEMagic.PE32 ? 4 : 8;
+					this.pointerSize = pefile.Reader.PEHeaders.PEHeader.Magic == PEMagic.PE32 ? 4 : 8;
 			}
 
 			public int GetArrayType(int elementType, ArrayShape shape) =>
@@ -702,7 +713,7 @@ namespace ICSharpCode.Decompiler
 				var typeDef = module?.ResolveType(handle, new GenericContext()).GetDefinition();
 				if (typeDef == null || typeDef.MetadataToken.IsNil)
 					return 0;
-				reader = typeDef.ParentModule.PEFile.Metadata;
+				reader = typeDef.ParentModule.MetadataFile.Metadata;
 				var td = reader.GetTypeDefinition((TypeDefinitionHandle)typeDef.MetadataToken);
 				return td.GetLayout().Size;
 			}
@@ -738,6 +749,12 @@ namespace ICSharpCode.Decompiler
 				SignatureCallingConvention.Unmanaged => "unmanaged",
 				_ => callConv.ToString().ToLowerInvariant()
 			};
+		}
+
+		public static UnmanagedMemoryStream AsStream(this MemoryMappedViewAccessor view)
+		{
+			long size = checked((long)view.SafeMemoryMappedViewHandle.ByteLength);
+			return new UnmanagedMemoryStream(view.SafeMemoryMappedViewHandle, 0, size);
 		}
 	}
 }

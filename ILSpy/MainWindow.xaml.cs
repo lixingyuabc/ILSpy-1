@@ -29,6 +29,7 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -45,12 +46,16 @@ using ICSharpCode.Decompiler.TypeSystem.Implementation;
 using ICSharpCode.ILSpy.Analyzers;
 using ICSharpCode.ILSpy.Commands;
 using ICSharpCode.ILSpy.Docking;
+using ICSharpCode.ILSpy.Options;
 using ICSharpCode.ILSpy.Search;
 using ICSharpCode.ILSpy.TextView;
 using ICSharpCode.ILSpy.Themes;
 using ICSharpCode.ILSpy.TreeNodes;
+using ICSharpCode.ILSpy.Updates;
 using ICSharpCode.ILSpy.ViewModels;
 using ICSharpCode.ILSpyX;
+using ICSharpCode.ILSpyX.FileLoaders;
+using ICSharpCode.ILSpyX.Settings;
 using ICSharpCode.TreeView;
 
 using Microsoft.Win32;
@@ -100,15 +105,27 @@ namespace ICSharpCode.ILSpy
 			}
 		}
 
+		public DecompilerSettings CurrentDecompilerSettings { get; internal set; }
+
+		public DisplaySettingsViewModel CurrentDisplaySettings { get; internal set; }
+
+		public DecompilationOptions CreateDecompilationOptions()
+		{
+			var decompilerView = DockWorkspace.Instance.ActiveTabPage.Content as IProgress<DecompilationProgress>;
+			return new DecompilationOptions(CurrentLanguageVersion, CurrentDecompilerSettings, CurrentDisplaySettings) { Progress = decompilerView };
+		}
+
 		public MainWindow()
 		{
 			instance = this;
 			var spySettings = ILSpySettings.Load();
 			this.spySettingsForMainWindow_Loaded = spySettings;
 			this.sessionSettings = new SessionSettings(spySettings);
+			this.CurrentDecompilerSettings = DecompilerSettingsPanel.LoadDecompilerSettings(spySettings);
+			this.CurrentDisplaySettings = DisplaySettingsPanel.LoadDisplaySettings(spySettings);
 			this.AssemblyListManager = new AssemblyListManager(spySettings) {
-				ApplyWinRTProjections = Options.DecompilerSettingsPanel.CurrentDecompilerSettings.ApplyWindowsRuntimeProjections,
-				UseDebugSymbols = Options.DecompilerSettingsPanel.CurrentDecompilerSettings.UseDebugSymbols
+				ApplyWinRTProjections = CurrentDecompilerSettings.ApplyWindowsRuntimeProjections,
+				UseDebugSymbols = CurrentDecompilerSettings.UseDebugSymbols
 			};
 
 			// Make sure Images are initialized on the UI thread.
@@ -136,6 +153,7 @@ namespace ICSharpCode.ILSpy
 			InitMainMenu();
 			InitWindowMenu();
 			InitToolbar();
+			InitFileLoaders();
 			ContextMenuProvider.Add(AssemblyTreeView);
 
 			this.Loaded += MainWindow_Loaded;
@@ -170,7 +188,7 @@ namespace ICSharpCode.ILSpy
 				case nameof(SessionSettings.ActiveAssemblyList):
 					ShowAssemblyList(sessionSettings.ActiveAssemblyList);
 					break;
-				case nameof(SessionSettings.IsDarkMode):
+				case nameof(SessionSettings.Theme):
 					// update syntax highlighting and force reload (AvalonEdit does not automatically refresh on highlighting change)
 					DecompilerTextView.RegisterHighlighting();
 					DecompileSelectedNodes(DockWorkspace.Instance.ActiveTabPage.GetState() as DecompilerTextViewState);
@@ -284,6 +302,12 @@ namespace ICSharpCode.ILSpy
 							}
 
 							menuItem.IsEnabled = entry.Metadata.IsEnabled;
+							if (entry.Value is ToggleableCommand toggle)
+							{
+								menuItem.IsCheckable = true;
+								menuItem.SetBinding(MenuItem.IsCheckedProperty, new Binding("IsChecked") { Source = entry.Value, Mode = BindingMode.OneWay });
+							}
+
 							menuItem.InputGestureText = entry.Metadata.InputGestureText;
 							parentMenuItem.Items.Add(menuItem);
 						}
@@ -557,6 +581,19 @@ namespace ICSharpCode.ILSpy
 		}
 		#endregion
 
+		#region File Loader extensibility
+
+		void InitFileLoaders()
+		{
+			// TODO
+			foreach (var loader in App.ExportProvider.GetExportedValues<IFileLoader>())
+			{
+
+			}
+		}
+
+		#endregion
+
 		#region Message Hook
 		protected override void OnSourceInitialized(EventArgs e)
 		{
@@ -567,7 +604,7 @@ namespace ICSharpCode.ILSpy
 			{
 				hwndSource.AddHook(WndProc);
 			}
-			App.ReleaseSingleInstanceMutex();
+			SingleInstanceHandling.ReleaseSingleInstanceMutex();
 			// Validate and Set Window Bounds
 			Rect bounds = Rect.Transform(sessionSettings.WindowBounds, source.CompositionTarget.TransformToDevice);
 			var boundsRect = new System.Drawing.Rectangle((int)bounds.Left, (int)bounds.Top, (int)bounds.Width, (int)bounds.Height);
@@ -688,7 +725,7 @@ namespace ICSharpCode.ILSpy
 						{
 							// FindNamespaceNode() blocks the UI if the assembly is not yet loaded,
 							// so use an async wait instead.
-							await asm.GetPEFileAsync().Catch<Exception>(ex => { });
+							await asm.GetMetadataFileAsync().Catch<Exception>(ex => { });
 							NamespaceTreeNode nsNode = asmNode.FindNamespaceNode(namespaceName);
 							if (nsNode != null)
 							{
@@ -714,7 +751,7 @@ namespace ICSharpCode.ILSpy
 					// Make sure we wait for assemblies being loaded...
 					// BeginInvoke in LoadedAssembly.LookupReferencedAssemblyInternal
 					await Dispatcher.InvokeAsync(delegate { }, DispatcherPriority.Normal);
-					if (mr != null && mr.ParentModule.PEFile != null)
+					if (mr != null && mr.ParentModule.MetadataFile != null)
 					{
 						found = true;
 						if (AssemblyTreeView.SelectedItem == initialSelection)
@@ -751,7 +788,7 @@ namespace ICSharpCode.ILSpy
 						{
 							// FindNodeByPath() blocks the UI if the assembly is not yet loaded,
 							// so use an async wait instead.
-							await asm.GetPEFileAsync().Catch<Exception>(ex => { });
+							await asm.GetMetadataFileAsync().Catch<Exception>(ex => { });
 						}
 					}
 					node = FindNodeByPath(activeTreeViewPath, true);
@@ -788,12 +825,12 @@ namespace ICSharpCode.ILSpy
 			}
 			foreach (LoadedAssembly asm in relevantAssemblies.ToList())
 			{
-				var module = asm.GetPEFileOrNull();
+				var module = asm.GetMetadataFileOrNull();
 				if (CanResolveTypeInPEFile(module, typeRef, out var typeHandle))
 				{
 					ICompilation compilation = typeHandle.Kind == HandleKind.ExportedType
 						? new DecompilerTypeSystem(module, module.GetAssemblyResolver())
-						: new SimpleCompilation(module, MinimalCorlib.Instance);
+						: new SimpleCompilation((PEFile)module, MinimalCorlib.Instance);
 					return memberRef == null
 						? typeRef.Resolve(new SimpleTypeResolveContext(compilation)) as ITypeDefinition
 						: (IEntity)memberRef.Resolve(new SimpleTypeResolveContext(compilation));
@@ -802,14 +839,8 @@ namespace ICSharpCode.ILSpy
 			return null;
 		}
 
-		static bool CanResolveTypeInPEFile(PEFile module, ITypeReference typeRef, out EntityHandle typeHandle)
+		static bool CanResolveTypeInPEFile(MetadataFile module, ITypeReference typeRef, out EntityHandle typeHandle)
 		{
-			if (module == null)
-			{
-				typeHandle = default;
-				return false;
-			}
-
 			// We intentionally ignore reference assemblies, so that the loop continues looking for another assembly that might have a usable definition.
 			if (module.IsReferenceAssembly())
 			{
@@ -940,13 +971,14 @@ namespace ICSharpCode.ILSpy
 			string downloadUrl;
 			if (forceCheck)
 			{
-				downloadUrl = await AboutPage.CheckForUpdatesAsync(spySettings);
+				downloadUrl = await NotifyOfUpdatesStrategy.CheckForUpdatesAsync(spySettings);
 			}
 			else
 			{
-				downloadUrl = await AboutPage.CheckForUpdatesIfEnabledAsync(spySettings);
+				downloadUrl = await NotifyOfUpdatesStrategy.CheckForUpdatesIfEnabledAsync(spySettings);
 			}
 
+			// The Update Panel is only available for NotifyOfUpdatesStrategy, AutoUpdate will have differing UI requirements
 			AdjustUpdateUIAfterCheck(downloadUrl, forceCheck);
 		}
 
@@ -964,7 +996,7 @@ namespace ICSharpCode.ILSpy
 			else
 			{
 				updatePanel.Visibility = Visibility.Collapsed;
-				string downloadUrl = await AboutPage.CheckForUpdatesAsync(ILSpySettings.Load());
+				string downloadUrl = await NotifyOfUpdatesStrategy.CheckForUpdatesAsync(ILSpySettings.Load());
 				AdjustUpdateUIAfterCheck(downloadUrl, true);
 			}
 		}
@@ -1075,8 +1107,10 @@ namespace ICSharpCode.ILSpy
 			// filterSettings is mutable; but the ILSpyTreeNode filtering assumes that filter settings are immutable.
 			// Thus, the main window will use one mutable instance (for data-binding), and assign a new clone to the ILSpyTreeNodes whenever the main
 			// mutable instance changes.
+			FilterSettings filterSettings = DockWorkspace.Instance.ActiveTabPage.FilterSettings.Clone();
 			if (assemblyListTreeNode != null)
-				assemblyListTreeNode.FilterSettings = DockWorkspace.Instance.ActiveTabPage.FilterSettings.Clone();
+				assemblyListTreeNode.FilterSettings = filterSettings;
+			SearchPane.UpdateFilter(filterSettings);
 		}
 
 		internal AssemblyListTreeNode AssemblyListTreeNode {
@@ -1234,7 +1268,7 @@ namespace ICSharpCode.ILSpy
 			{
 				case LoadedAssembly lasm:
 					return assemblyListTreeNode.FindAssemblyNode(lasm);
-				case PEFile asm:
+				case MetadataFile asm:
 					return assemblyListTreeNode.FindAssemblyNode(asm);
 				case Resource res:
 					return assemblyListTreeNode.FindResourceNode(res);
@@ -1289,7 +1323,7 @@ namespace ICSharpCode.ILSpy
 					break;
 				case EntityReference unresolvedEntity:
 					string protocol = unresolvedEntity.Protocol ?? "decompile";
-					PEFile file = unresolvedEntity.ResolveAssembly(assemblyList);
+					var file = unresolvedEntity.ResolveAssembly(assemblyList);
 					if (file == null)
 					{
 						break;
@@ -1360,7 +1394,7 @@ namespace ICSharpCode.ILSpy
 		{
 			e.Handled = true;
 			OpenFileDialog dlg = new OpenFileDialog();
-			dlg.Filter = ".NET assemblies|*.dll;*.exe;*.winmd|Nuget Packages (*.nupkg)|*.nupkg|All files|*.*";
+			dlg.Filter = ".NET assemblies|*.dll;*.exe;*.winmd;*.wasm|Nuget Packages (*.nupkg)|*.nupkg|Portable Program Database (*.pdb)|*.pdb|All files|*.*";
 			dlg.Multiselect = true;
 			dlg.RestoreDirectory = true;
 			if (dlg.ShowDialog() == true)
@@ -1415,7 +1449,7 @@ namespace ICSharpCode.ILSpy
 				refreshInProgress = true;
 				var path = GetPathForNode(AssemblyTreeView.SelectedItem as SharpTreeNode);
 				ShowAssemblyList(AssemblyListManager.LoadList(assemblyList.ListName));
-				SelectNode(FindNodeByPath(path, true), false, false);
+				SelectNode(FindNodeByPath(path, true), inNewTabPage: false, AssemblyTreeView.IsFocused);
 			}
 			finally
 			{
@@ -1494,7 +1528,8 @@ namespace ICSharpCode.ILSpy
 				NavigateTo(new RequestNavigateEventArgs(newState.ViewedUri, null), recordHistory: false);
 				return;
 			}
-			var options = new DecompilationOptions() { TextViewState = newState };
+			var options = MainWindow.Instance.CreateDecompilationOptions();
+			options.TextViewState = newState;
 			decompilationTask = DockWorkspace.Instance.ActiveTabPage.ShowTextViewAsync(
 				textView => textView.DecompileAsync(this.CurrentLanguage, this.SelectedNodes, options)
 			);

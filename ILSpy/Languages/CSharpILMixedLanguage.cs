@@ -23,8 +23,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection.Metadata;
-using System.Threading;
-using System.Windows;
 using System.Windows.Media;
 
 using ICSharpCode.AvalonEdit.Highlighting;
@@ -50,20 +48,21 @@ namespace ICSharpCode.ILSpy
 
 		protected override ReflectionDisassembler CreateDisassembler(ITextOutput output, DecompilationOptions options)
 		{
+			var displaySettings = MainWindow.Instance.CurrentDisplaySettings;
 			return new ReflectionDisassembler(output,
 				new MixedMethodBodyDisassembler(output, options) {
 					DetectControlStructure = detectControlStructure,
 					ShowSequencePoints = options.DecompilerSettings.ShowDebugInfo
 				},
 				options.CancellationToken) {
-				ShowMetadataTokens = Options.DisplaySettingsPanel.CurrentDisplaySettings.ShowMetadataTokens,
-				ShowMetadataTokensInBase10 = Options.DisplaySettingsPanel.CurrentDisplaySettings.ShowMetadataTokensInBase10,
-				ShowRawRVAOffsetAndBytes = Options.DisplaySettingsPanel.CurrentDisplaySettings.ShowRawOffsetsAndBytesBeforeInstruction,
+				ShowMetadataTokens = displaySettings.ShowMetadataTokens,
+				ShowMetadataTokensInBase10 = displaySettings.ShowMetadataTokensInBase10,
+				ShowRawRVAOffsetAndBytes = displaySettings.ShowRawOffsetsAndBytesBeforeInstruction,
 				ExpandMemberDefinitions = options.DecompilerSettings.ExpandMemberDefinitions
 			};
 		}
 
-		static CSharpDecompiler CreateDecompiler(PEFile module, DecompilationOptions options)
+		static CSharpDecompiler CreateDecompiler(MetadataFile module, DecompilationOptions options)
 		{
 			CSharpDecompiler decompiler = new CSharpDecompiler(module, module.GetAssemblyResolver(), options.DecompilerSettings);
 			decompiler.CancellationToken = options.CancellationToken;
@@ -92,7 +91,7 @@ namespace ICSharpCode.ILSpy
 				this.options = options;
 			}
 
-			public override void Disassemble(PEFile module, MethodDefinitionHandle handle)
+			public override void Disassemble(MetadataFile module, MethodDefinitionHandle handle)
 			{
 				try
 				{
@@ -112,7 +111,7 @@ namespace ICSharpCode.ILSpy
 				}
 			}
 
-			protected override void WriteInstruction(ITextOutput output, MetadataReader metadata, MethodDefinitionHandle methodHandle, ref BlobReader blob, int methodRva)
+			protected override void WriteInstruction(ITextOutput output, MetadataFile metadata, MethodDefinitionHandle methodHandle, ref BlobReader blob, int methodRva)
 			{
 				int index = sequencePoints.BinarySearch(blob.Offset, seq => seq.Offset);
 				if (index >= 0)

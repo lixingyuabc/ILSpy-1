@@ -3,7 +3,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net6.0-windows</TargetFramework>
+    <TargetFramework>net8.0-windows</TargetFramework>
     <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
     <GenerateAssemblyInfo>False</GenerateAssemblyInfo>
     <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
@@ -19,7 +19,13 @@
     <SignAssembly>True</SignAssembly>
     <AssemblyOriginatorKeyFile>..\ICSharpCode.Decompiler\ICSharpCode.Decompiler.snk</AssemblyOriginatorKeyFile>
     <ServerGarbageCollection>true</ServerGarbageCollection>
+    <GarbageCollectionAdaptationMode>1</GarbageCollectionAdaptationMode>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
+
+  <ItemGroup>
+    <RuntimeHostConfigurationOption Include="Switch.System.Windows.Media.EnableHardwareAccelerationInRdp" Value="true" />
+  </ItemGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
     <DebugType>full</DebugType>
@@ -36,23 +42,13 @@
     <CodeAnalysisRuleSet>..\ICSharpCode.Decompiler\ICSharpCode.Decompiler.ruleset</CodeAnalysisRuleSet>
   </PropertyGroup>
 
-  <Import Project="..\packages.props" />
-
   <ItemGroup>
-    <PackageReference Include="AvalonEdit" Version="$(AvalonEditVersion)" />
-    <PackageReference Include="System.IO.Compression" Version="4.3.0" />
-    <PackageReference Include="System.Reflection.Metadata" Version="$(SystemReflectionMetadataVersion)" />
-    <PackageReference Include="System.Runtime.CompilerServices.Unsafe" Version="$(SystemCompilerServicesUnsafeVersion)" />
-    <PackageReference Include="Dirkster.AvalonDock.Themes.VS2013" Version="4.70.1" />
-    <PackageReference Include="Microsoft.VisualStudio.Composition" Version="16.9.20" />
-    <PackageReference Include="System.Composition" Version="$(SystemCompositionVersion)" />
-    <PackageReference Include="Mono.Cecil" Version="$(MonoCecilVersion)" />
-    <PackageReference Include="DataGridExtensions" Version="2.5.13" />
-    <PackageReference Include="Microsoft.Xaml.Behaviors.Wpf" Version="1.1.39" />
-    <PackageReference Include="TomsToolbox.Wpf.Styles" Version="$(WpfStylesToolboxVersion)" />
-    <PackageReference Include="System.Runtime.Loader" Version="4.3.0" />
-    <PackageReference Include="K4os.Compression.LZ4" Version="1.2.16" />
-    <PackageReference Include="System.Buffers" Version="4.5.1" />
+    <PackageReference Include="AvalonEdit" />
+    <PackageReference Include="Dirkster.AvalonDock.Themes.VS2013" />
+    <PackageReference Include="Microsoft.VisualStudio.Composition" />
+    <PackageReference Include="DataGridExtensions" />
+    <PackageReference Include="Microsoft.Xaml.Behaviors.Wpf" />
+    <PackageReference Include="TomsToolbox.Wpf.Styles" />
   </ItemGroup>
 
   <ItemGroup>
@@ -63,16 +59,11 @@
       <Link>license.txt</Link>
     </EmbeddedResource>
     <Resource Include="Images\NuGet.png" />
-    <Resource Include="Images\DarkMode.png" />
     <Resource Include="Images\ILSpy.ico" />
     <EmbeddedResource Include="TextView\CSharp-Mode.xshd" />
     <EmbeddedResource Include="TextView\ILAsm-Mode.xshd" />
     <EmbeddedResource Include="TextView\Asm-Mode.xshd" />
     <EmbeddedResource Include="TextView\XML-Mode.xshd" />
-    <EmbeddedResource Include="TextView\CSharp-Mode-Dark.xshd" />
-    <EmbeddedResource Include="TextView\ILAsm-Mode-Dark.xshd" />
-    <EmbeddedResource Include="TextView\Asm-Mode-Dark.xshd" />
-    <EmbeddedResource Include="TextView\XML-Mode-Dark.xshd" />
     <None Remove="Properties\launchSettings.json" />
   </ItemGroup>
 
@@ -98,7 +89,9 @@
   </ItemGroup>
 
   <ItemGroup Condition="'$(Configuration)' == 'Debug'">
-    <PackageReference Include="Microsoft.DiaSymReader.Converter.Xml" Version="$(DSRConverterXmlVersion)" />
+    <PackageReference Include="Microsoft.DiaSymReader.Converter.Xml" />
+	<PackageReference Include="Microsoft.DiaSymReader" />
+	<PackageReference Include="Microsoft.DiaSymReader.Native" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -107,6 +100,15 @@
     <!-- In VS 2022 there is an extra directory level that's why we need to add one more '..'  -->
     <VCBasePath Condition="!Exists('$(VCBasePath)Auxiliary\Build\$(VCToolsVersionPropsFileNameDefault)')">$(MSBuildToolsPath)\..\..\..\..\VC\</VCBasePath>
     <VCToolsVersionPropsFile>$(VCBasePath)Auxiliary\Build\$(VCToolsVersionPropsFileNameDefault)</VCToolsVersionPropsFile>
+    <EnableNETAnalyzers>True</EnableNETAnalyzers>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <NoWarn>1701;1702;CA1001;CA2213</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <NoWarn>1701;1702;CA1001;CA2213</NoWarn>
   </PropertyGroup>
 
   <Import Project="$(VCToolsVersionPropsFile)" Condition="Exists('$(VCToolsVersionPropsFile)')" />
@@ -118,7 +120,7 @@
     <SortResXStamp Include="obj\sort-resx.stamp" />
   </ItemGroup>
 
-  <Target Name="SortResX" BeforeTargets="BeforeBuild" Inputs="@(SortResXInput)" Outputs="@(SortResXStamp)">
+  <Target Name="SortResX" BeforeTargets="BeforeBuild" Inputs="@(SortResXInput)" Outputs="@(SortResXStamp)" Condition="'$(GITHUB_ACTIONS)' != 'true'">
     <PropertyGroup Condition=" '$(OS)' == 'Windows_NT' ">
       <SortResX>powershell -NoProfile -ExecutionPolicy Bypass -File BuildTools/sort-resx.ps1</SortResX>
     </PropertyGroup>

@@ -29,6 +29,7 @@ using System.Xml.Linq;
 using ICSharpCode.ILSpy.Docking;
 using ICSharpCode.ILSpy.Themes;
 using ICSharpCode.ILSpyX.Search;
+using ICSharpCode.ILSpyX.Settings;
 
 namespace ICSharpCode.ILSpy
 {
@@ -59,11 +60,8 @@ namespace ICSharpCode.ILSpy
 
 			this.WindowState = FromString((string)doc.Element("WindowState"), WindowState.Normal);
 			this.WindowBounds = FromString((string)doc.Element("WindowBounds"), DefaultWindowBounds);
-			this.SplitterPosition = FromString((string)doc.Element("SplitterPosition"), 0.4);
-			this.TopPaneSplitterPosition = FromString((string)doc.Element("TopPaneSplitterPosition"), 0.3);
-			this.BottomPaneSplitterPosition = FromString((string)doc.Element("BottomPaneSplitterPosition"), 0.3);
 			this.SelectedSearchMode = FromString((string)doc.Element("SelectedSearchMode"), SearchMode.TypeAndMember);
-			this.IsDarkMode = FromString((string)doc.Element(nameof(IsDarkMode)), false);
+			this.Theme = FromString((string)doc.Element(nameof(Theme)), ThemeManager.Current.DefaultTheme);
 			string currentCulture = (string)doc.Element(nameof(CurrentCulture));
 			this.CurrentCulture = string.IsNullOrEmpty(currentCulture) ? null : currentCulture;
 
@@ -80,10 +78,10 @@ namespace ICSharpCode.ILSpy
 		public FilterSettings FilterSettings { get; internal set; }
 		public SearchMode SelectedSearchMode { get; set; }
 
-		public bool IsDarkMode {
-			get => ThemeManager.Current.IsDarkMode;
+		public string Theme {
+			get => ThemeManager.Current.Theme;
 			set {
-				ThemeManager.Current.IsDarkMode = value;
+				ThemeManager.Current.Theme = value;
 				OnPropertyChanged();
 			}
 		}
@@ -118,15 +116,10 @@ namespace ICSharpCode.ILSpy
 		public WindowState WindowState = WindowState.Normal;
 		public Rect WindowBounds;
 		internal static Rect DefaultWindowBounds = new Rect(10, 10, 750, 550);
-		/// <summary>
-		/// position of the left/right splitter
-		/// </summary>
-		public double SplitterPosition;
-		public double TopPaneSplitterPosition, BottomPaneSplitterPosition;
 
 		public DockLayoutSettings DockLayout { get; private set; }
 
-		public void Save()
+		public XElement ToXml()
 		{
 			XElement doc = new XElement("SessionSettings");
 			doc.Add(this.FilterSettings.SaveAsXml());
@@ -144,11 +137,8 @@ namespace ICSharpCode.ILSpy
 			}
 			doc.Add(new XElement("WindowState", ToString(this.WindowState)));
 			doc.Add(new XElement("WindowBounds", ToString(this.WindowBounds)));
-			doc.Add(new XElement("SplitterPosition", ToString(this.SplitterPosition)));
-			doc.Add(new XElement("TopPaneSplitterPosition", ToString(this.TopPaneSplitterPosition)));
-			doc.Add(new XElement("BottomPaneSplitterPosition", ToString(this.BottomPaneSplitterPosition)));
 			doc.Add(new XElement("SelectedSearchMode", ToString(this.SelectedSearchMode)));
-			doc.Add(new XElement(nameof(IsDarkMode), ToString(this.IsDarkMode)));
+			doc.Add(new XElement(nameof(Theme), ToString(this.Theme)));
 			if (this.CurrentCulture != null)
 			{
 				doc.Add(new XElement(nameof(CurrentCulture), this.CurrentCulture));
@@ -160,7 +150,12 @@ namespace ICSharpCode.ILSpy
 				dockLayoutElement.Add(DockLayout.SaveAsXml());
 			}
 			doc.Add(dockLayoutElement);
+			return doc;
+		}
 
+		public void Save()
+		{
+			var doc = ToXml();
 			ILSpySettings.SaveSettings(doc);
 		}
 

@@ -56,13 +56,14 @@ namespace ICSharpCode.ILSpy
 
 		protected virtual ReflectionDisassembler CreateDisassembler(ITextOutput output, DecompilationOptions options)
 		{
+			var displaySettings = MainWindow.Instance.CurrentDisplaySettings;
 			output.IndentationString = options.DecompilerSettings.CSharpFormattingOptions.IndentationString;
 			return new ReflectionDisassembler(output, options.CancellationToken) {
 				DetectControlStructure = detectControlStructure,
 				ShowSequencePoints = options.DecompilerSettings.ShowDebugInfo,
-				ShowMetadataTokens = Options.DisplaySettingsPanel.CurrentDisplaySettings.ShowMetadataTokens,
-				ShowMetadataTokensInBase10 = Options.DisplaySettingsPanel.CurrentDisplaySettings.ShowMetadataTokensInBase10,
-				ShowRawRVAOffsetAndBytes = Options.DisplaySettingsPanel.CurrentDisplaySettings.ShowRawOffsetsAndBytesBeforeInstruction,
+				ShowMetadataTokens = displaySettings.ShowMetadataTokens,
+				ShowMetadataTokensInBase10 = displaySettings.ShowMetadataTokensInBase10,
+				ShowRawRVAOffsetAndBytes = displaySettings.ShowRawOffsetsAndBytesBeforeInstruction,
 				ExpandMemberDefinitions = options.DecompilerSettings.ExpandMemberDefinitions
 			};
 		}
@@ -70,7 +71,7 @@ namespace ICSharpCode.ILSpy
 		public override void DecompileMethod(IMethod method, ITextOutput output, DecompilationOptions options)
 		{
 			var dis = CreateDisassembler(output, options);
-			PEFile module = method.ParentModule.PEFile;
+			MetadataFile module = method.ParentModule.MetadataFile;
 			dis.AssemblyResolver = module.GetAssemblyResolver();
 			dis.DebugInfo = module.GetDebugInfoOrNull();
 			dis.DisassembleMethod(module, (MethodDefinitionHandle)method.MetadataToken);
@@ -79,7 +80,7 @@ namespace ICSharpCode.ILSpy
 		public override void DecompileField(IField field, ITextOutput output, DecompilationOptions options)
 		{
 			var dis = CreateDisassembler(output, options);
-			PEFile module = field.ParentModule.PEFile;
+			MetadataFile module = field.ParentModule.MetadataFile;
 			dis.AssemblyResolver = module.GetAssemblyResolver();
 			dis.DebugInfo = module.GetDebugInfoOrNull();
 			dis.DisassembleField(module, (FieldDefinitionHandle)field.MetadataToken);
@@ -88,7 +89,7 @@ namespace ICSharpCode.ILSpy
 		public override void DecompileProperty(IProperty property, ITextOutput output, DecompilationOptions options)
 		{
 			var dis = CreateDisassembler(output, options);
-			PEFile module = property.ParentModule.PEFile;
+			MetadataFile module = property.ParentModule.MetadataFile;
 			dis.AssemblyResolver = module.GetAssemblyResolver();
 			dis.DebugInfo = module.GetDebugInfoOrNull();
 			dis.DisassembleProperty(module, (PropertyDefinitionHandle)property.MetadataToken);
@@ -114,7 +115,7 @@ namespace ICSharpCode.ILSpy
 		public override void DecompileEvent(IEvent ev, ITextOutput output, DecompilationOptions options)
 		{
 			var dis = CreateDisassembler(output, options);
-			PEFile module = ev.ParentModule.PEFile;
+			MetadataFile module = ev.ParentModule.MetadataFile;
 			dis.AssemblyResolver = module.GetAssemblyResolver();
 			dis.DebugInfo = module.GetDebugInfoOrNull();
 			dis.DisassembleEvent(module, (EventDefinitionHandle)ev.MetadataToken);
@@ -145,7 +146,7 @@ namespace ICSharpCode.ILSpy
 		public override void DecompileType(ITypeDefinition type, ITextOutput output, DecompilationOptions options)
 		{
 			var dis = CreateDisassembler(output, options);
-			PEFile module = type.ParentModule.PEFile;
+			MetadataFile module = type.ParentModule.MetadataFile;
 			dis.AssemblyResolver = module.GetAssemblyResolver();
 			dis.DebugInfo = module.GetDebugInfoOrNull();
 			dis.DisassembleType(module, (TypeDefinitionHandle)type.MetadataToken);
@@ -154,7 +155,7 @@ namespace ICSharpCode.ILSpy
 		public override void DecompileNamespace(string nameSpace, IEnumerable<ITypeDefinition> types, ITextOutput output, DecompilationOptions options)
 		{
 			var dis = CreateDisassembler(output, options);
-			PEFile module = types.FirstOrDefault()?.ParentModule.PEFile;
+			MetadataFile module = types.FirstOrDefault()?.ParentModule.MetadataFile;
 			dis.AssemblyResolver = module.GetAssemblyResolver();
 			dis.DebugInfo = module.GetDebugInfoOrNull();
 			dis.DisassembleNamespace(nameSpace, module, types.Select(t => (TypeDefinitionHandle)t.MetadataToken));
@@ -164,14 +165,15 @@ namespace ICSharpCode.ILSpy
 		{
 			output.WriteLine("// " + assembly.FileName);
 			output.WriteLine();
-			var module = assembly.GetPEFileAsync().GetAwaiter().GetResult();
-			var metadata = module.Metadata;
-			var dis = CreateDisassembler(output, options);
+			var module = assembly.GetMetadataFileOrNull();
 
 			if (options.FullDecompilation && options.SaveAsProjectDirectory != null)
 			{
 				throw new NotSupportedException($"Language '{Name}' does not support exporting assemblies as projects!");
 			}
+
+			var metadata = module.Metadata;
+			var dis = CreateDisassembler(output, options);
 
 			// don't automatically load additional assemblies when an assembly node is selected in the tree view
 			dis.AssemblyResolver = module.GetAssemblyResolver(loadOnDemand: options.FullDecompilation);
@@ -194,28 +196,34 @@ namespace ICSharpCode.ILSpy
 		public override RichText GetRichTextTooltip(IEntity entity)
 		{
 			var output = new AvalonEditTextOutput() { IgnoreNewLineAndIndent = true };
-			var disasm = CreateDisassembler(output, new DecompilationOptions());
+			var disasm = CreateDisassembler(output, MainWindow.Instance.CreateDecompilationOptions());
+			MetadataFile module = entity.ParentModule?.MetadataFile;
+			if (module == null)
+			{
+				return null;
+			}
+
 			switch (entity.SymbolKind)
 			{
 				case SymbolKind.TypeDefinition:
-					disasm.DisassembleTypeHeader(entity.ParentModule.PEFile, (TypeDefinitionHandle)entity.MetadataToken);
+					disasm.DisassembleTypeHeader(module, (TypeDefinitionHandle)entity.MetadataToken);
 					break;
 				case SymbolKind.Field:
-					disasm.DisassembleFieldHeader(entity.ParentModule.PEFile, (FieldDefinitionHandle)entity.MetadataToken);
+					disasm.DisassembleFieldHeader(module, (FieldDefinitionHandle)entity.MetadataToken);
 					break;
 				case SymbolKind.Property:
 				case SymbolKind.Indexer:
-					disasm.DisassemblePropertyHeader(entity.ParentModule.PEFile, (PropertyDefinitionHandle)entity.MetadataToken);
+					disasm.DisassemblePropertyHeader(module, (PropertyDefinitionHandle)entity.MetadataToken);
 					break;
 				case SymbolKind.Event:
-					disasm.DisassembleEventHeader(entity.ParentModule.PEFile, (EventDefinitionHandle)entity.MetadataToken);
+					disasm.DisassembleEventHeader(module, (EventDefinitionHandle)entity.MetadataToken);
 					break;
 				case SymbolKind.Method:
 				case SymbolKind.Operator:
 				case SymbolKind.Constructor:
 				case SymbolKind.Destructor:
 				case SymbolKind.Accessor:
-					disasm.DisassembleMethodHeader(entity.ParentModule.PEFile, (MethodDefinitionHandle)entity.MetadataToken);
+					disasm.DisassembleMethodHeader(module, (MethodDefinitionHandle)entity.MetadataToken);
 					break;
 				default:
 					output.Write(GetDisplayName(entity, true, true, true));

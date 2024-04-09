@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2018 Daniel Grunwald
+// Copyright (c) 2018 Daniel Grunwald
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -64,10 +64,11 @@ namespace ICSharpCode.Decompiler.TypeSystem.Implementation
 			this.attributes = def.Attributes;
 
 			this.symbolKind = SymbolKind.Method;
-			var (accessorOwner, semanticsAttribute) = module.PEFile.MethodSemanticsLookup.GetSemantics(handle);
+			var (accessorOwner, semanticsAttribute) = module.MetadataFile.MethodSemanticsLookup.GetSemantics(handle);
 			const MethodAttributes finalizerAttributes = (MethodAttributes.Virtual | MethodAttributes.Family | MethodAttributes.HideBySig);
 			this.typeParameters = MetadataTypeParameter.Create(module, this, def.GetGenericParameters());
-			if (semanticsAttribute != 0)
+			if (semanticsAttribute != 0 && !accessorOwner.IsNil
+				&& accessorOwner.Kind is HandleKind.PropertyDefinition or HandleKind.EventDefinition)
 			{
 				this.symbolKind = SymbolKind.Accessor;
 				this.accessorOwner = accessorOwner;
@@ -128,7 +129,6 @@ namespace ICSharpCode.Decompiler.TypeSystem.Implementation
 		public bool IsAccessor => symbolKind == SymbolKind.Accessor;
 
 		public bool HasBody => module.metadata.GetMethodDefinition(handle).HasBody();
-
 
 		public IMember AccessorOwner {
 			get {
@@ -209,13 +209,14 @@ namespace ICSharpCode.Decompiler.TypeSystem.Implementation
 			MetadataModule module, IParameterizedMember owner,
 			MethodSignature<IType> signature, ParameterHandleCollection? parameterHandles,
 			Nullability nullableContext, TypeSystemOptions typeSystemOptions,
-			CustomAttributeHandleCollection? returnTypeAttributes = null)
+			CustomAttributeHandleCollection? additionalReturnTypeAttributes = null)
 		{
 			var metadata = module.metadata;
 			int i = 0;
 			IParameter[] parameters = new IParameter[signature.RequiredParameterCount
 				+ (signature.Header.CallingConvention == SignatureCallingConvention.VarArgs ? 1 : 0)];
 			IType parameterType;
+			CustomAttributeHandleCollection? returnTypeAttributes = null;
 			if (parameterHandles != null)
 			{
 				foreach (var parameterHandle in parameterHandles)
@@ -225,13 +226,12 @@ namespace ICSharpCode.Decompiler.TypeSystem.Implementation
 					{
 						// "parameter" holds return type attributes.
 						// Note: for properties, the attributes normally stored on a method's return type
-						// are instead stored as normal attributes on the property.
-						// So MetadataProperty provides a non-null value for returnTypeAttributes,
-						// which then should be preferred over the attributes on the accessor's parameters.
-						if (returnTypeAttributes == null)
-						{
-							returnTypeAttributes = par.GetCustomAttributes();
-						}
+						// are instead typically stored as normal attributes on the property.
+						// So MetadataProperty provides a non-null value for additionalReturnTypeAttributes,
+						// which then will be preferred over the attributes on the accessor's parameters.
+						// However if an attribute only exists on the accessor's parameters, we still want
+						// to process it here.
+						returnTypeAttributes = par.GetCustomAttributes();
 					}
 					else if (i < par.SequenceNumber && par.SequenceNumber <= signature.RequiredParameterCount)
 					{
@@ -272,7 +272,7 @@ namespace ICSharpCode.Decompiler.TypeSystem.Implementation
 			Debug.Assert(i == parameters.Length);
 			var returnType = ApplyAttributeTypeVisitor.ApplyAttributesToType(signature.ReturnType,
 				module.Compilation, returnTypeAttributes, metadata, typeSystemOptions, nullableContext,
-				isSignatureReturnType: true);
+				additionalAttributes: additionalReturnTypeAttributes);
 			return (returnType, parameters, signature.ReturnType as ModifiedType);
 		}
 		#endregion
@@ -463,6 +463,30 @@ namespace ICSharpCode.Decompiler.TypeSystem.Implementation
 
 			return b.Build();
 		}
+
+		public bool HasAttribute(KnownAttribute attribute)
+		{
+			if (!attribute.IsCustomAttribute())
+			{
+				return GetAttributes().Any(attr => attr.AttributeType.IsKnownType(attribute));
+			}
+			var b = new AttributeListBuilder(module);
+			var metadata = module.metadata;
+			var def = metadata.GetMethodDefinition(handle);
+			return b.HasAttribute(metadata, def.GetCustomAttributes(), attribute, symbolKind);
+		}
+
+		public IAttribute GetAttribute(KnownAttribute attribute)
+		{
+			if (!attribute.IsCustomAttribute())
+			{
+				return GetAttributes().FirstOrDefault(attr => attr.AttributeType.IsKnownType(attribute));
+			}
+			var b = new AttributeListBuilder(module);
+			var metadata = module.metadata;
+			var def = metadata.GetMethodDefinition(handle);
+			return b.GetAttribute(metadata, def.GetCustomAttributes(), attribute, symbolKind);
+		}
 		#endregion
 
 		#region Return type attributes
@@ -553,8 +577,23 @@ namespace ICSharpCode.Decompiler.TypeSystem.Implementation
 		public bool IsStatic => (attributes & MethodAttributes.Static) != 0;
 		public bool IsAbstract => (attributes & MethodAttributes.Abstract) != 0;
 		public bool IsSealed => (attributes & (MethodAttributes.Abstract | MethodAttributes.Final | MethodAttributes.NewSlot | MethodAttributes.Static)) == MethodAttributes.Final;
-		public bool IsVirtual => (attributes & (MethodAttributes.Abstract | MethodAttributes.Virtual | MethodAttributes.NewSlot | MethodAttributes.Final)) == (MethodAttributes.Virtual | MethodAttributes.NewSlot);
-		public bool IsOverride => (attributes & (MethodAttributes.NewSlot | MethodAttributes.Virtual)) == MethodAttributes.Virtual;
+
+		public bool IsVirtual {
+			get {
+				if (IsStatic)
+				{
+					return (attributes & (MethodAttributes.Abstract | MethodAttributes.Virtual)) == MethodAttributes.Virtual;
+				}
+				else
+				{
+					const MethodAttributes mask = MethodAttributes.Abstract | MethodAttributes.Virtual
+						| MethodAttributes.NewSlot | MethodAttributes.Final;
+					return (attributes & mask) == (MethodAttributes.Virtual | MethodAttributes.NewSlot);
+				}
+			}
+		}
+
+		public bool IsOverride => (attributes & (MethodAttributes.NewSlot | MethodAttributes.Virtual | MethodAttributes.Static)) == MethodAttributes.Virtual;
 		public bool IsOverridable
 			=> (attributes & (MethodAttributes.Abstract | MethodAttributes.Virtual)) != 0
 			&& (attributes & MethodAttributes.Final) == 0;
@@ -567,14 +606,14 @@ namespace ICSharpCode.Decompiler.TypeSystem.Implementation
 		{
 			if (obj is MetadataMethod m)
 			{
-				return handle == m.handle && module.PEFile == m.module.PEFile;
+				return handle == m.handle && module.MetadataFile == m.module.MetadataFile;
 			}
 			return false;
 		}
 
 		public override int GetHashCode()
 		{
-			return 0x5a00d671 ^ module.PEFile.GetHashCode() ^ handle.GetHashCode();
+			return 0x5a00d671 ^ module.MetadataFile.GetHashCode() ^ handle.GetHashCode();
 		}
 
 		bool IMember.Equals(IMember obj, TypeVisitor typeNormalization)

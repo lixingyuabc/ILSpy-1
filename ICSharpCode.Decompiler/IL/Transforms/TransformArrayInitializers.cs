@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2015 Siegfried Pammer
+// Copyright (c) 2015 Siegfried Pammer
 // 
 // Permission is hereby granted, free of charge, to any person obtaining a copy of this
 // software and associated documentation files (the "Software"), to deal in the Software
@@ -20,6 +20,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection.Metadata;
+using System.Text;
 
 using ICSharpCode.Decompiler.TypeSystem;
 using ICSharpCode.Decompiler.Util;
@@ -113,9 +114,9 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			return false;
 		}
 
-		internal static bool TransformSpanTArrayInitialization(NewObj inst, StatementTransformContext context, out Block block)
+		internal static bool TransformSpanTArrayInitialization(NewObj inst, StatementTransformContext context, out ILInstruction replacement)
 		{
-			block = null;
+			replacement = null;
 			if (!context.Settings.ArrayInitializers)
 				return false;
 			if (MatchSpanTCtorWithPointerAndSize(inst, context, out var elementType, out var field, out var size))
@@ -123,16 +124,46 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 				if (field.HasFlag(System.Reflection.FieldAttributes.HasFieldRVA))
 				{
 					var valuesList = new List<ILInstruction>();
-					var initialValue = field.GetInitialValue(context.PEFile.Reader, context.TypeSystem);
+					var initialValue = field.GetInitialValue(context.PEFile, context.TypeSystem);
+					if (context.Settings.Utf8StringLiterals &&
+						elementType.IsKnownType(KnownTypeCode.Byte) &&
+						DecodeUTF8String(initialValue, size, out string text))
+					{
+						replacement = new LdStrUtf8(text);
+						return true;
+					}
 					if (DecodeArrayInitializer(elementType, initialValue, new[] { size }, valuesList))
 					{
 						var tempStore = context.Function.RegisterVariable(VariableKind.InitializerTarget, new ArrayType(context.TypeSystem, elementType));
-						block = BlockFromInitializer(tempStore, elementType, new[] { size }, valuesList.ToArray());
+						replacement = BlockFromInitializer(tempStore, elementType, new[] { size }, valuesList.ToArray());
 						return true;
 					}
 				}
 			}
 			return false;
+		}
+
+		private static unsafe bool DecodeUTF8String(BlobReader blob, int size, out string text)
+		{
+			if (size > blob.RemainingBytes)
+			{
+				text = null;
+				return false;
+			}
+			for (int i = 0; i < size; i++)
+			{
+				byte val = blob.CurrentPointer[i];
+				// If the string has control characters, it's probably binary data and not a string.
+				if (val < 0x20 && val is not ((byte)'\r' or (byte)'\n' or (byte)'\t'))
+				{
+					text = null;
+					return false;
+				}
+			}
+			text = Encoding.UTF8.GetString(blob.CurrentPointer, size);
+			// Only use UTF8 string literal if we can perfectly roundtrip the data
+			byte[] bytes = Encoding.UTF8.GetBytes(text);
+			return MemoryExtensions.SequenceEqual(bytes, new ReadOnlySpan<byte>(blob.CurrentPointer, size));
 		}
 
 		static bool MatchSpanTCtorWithPointerAndSize(NewObj newObj, StatementTransformContext context, out IType elementType, out FieldDefinition field, out int size)
@@ -141,7 +172,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			size = default;
 			elementType = null;
 			IType type = newObj.Method.DeclaringType;
-			if (!type.IsKnownType(KnownTypeCode.SpanOfT) && !type.IsKnownType(KnownTypeCode.ReadOnlySpanOfT))
+			if (!type.IsKnownType(KnownTypeCode.ReadOnlySpanOfT))
 				return false;
 			if (newObj.Arguments.Count != 2 || type.TypeArguments.Count != 1)
 				return false;
@@ -280,7 +311,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			{
 				return false;
 			}
-			blob = fd.GetInitialValue(context.PEFile.Reader, context.TypeSystem);
+			blob = fd.GetInitialValue(context.PEFile, context.TypeSystem);
 			return true;
 		}
 
@@ -620,16 +651,21 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			var block = new Block(BlockKind.ArrayInitializer);
 			block.Instructions.Add(new StLoc(v, new NewArr(elementType, arrayLength.Select(l => new LdcI4(l)).ToArray())));
 			int step = arrayLength.Length + 1;
+
+			var indices = new List<ILInstruction>();
 			for (int i = 0; i < values.Length / step; i++)
 			{
 				// values array is filled backwards
 				var value = values[step * i];
-				var indices = new List<ILInstruction>();
+
+				indices.EnsureCapacity(step - 1);
 				for (int j = step - 1; j >= 1; j--)
 				{
 					indices.Add(values[step * i + j]);
 				}
+
 				block.Instructions.Add(StElem(new LdLoc(v), indices.ToArray(), value, elementType));
+				indices.Clear();
 			}
 			block.FinalInstruction = new LdLoc(v);
 			return block;
@@ -684,7 +720,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 				if (field.HasFlag(System.Reflection.FieldAttributes.HasFieldRVA))
 				{
 					var valuesList = new List<ILInstruction>();
-					var initialValue = field.GetInitialValue(context.PEFile.Reader, context.TypeSystem);
+					var initialValue = field.GetInitialValue(context.PEFile, context.TypeSystem);
 					if (DecodeArrayInitializer(arrayType, initialValue, arrayLength, valuesList))
 					{
 						values = valuesList.ToArray();
@@ -717,7 +753,7 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			if (!field.HasFlag(System.Reflection.FieldAttributes.HasFieldRVA))
 				return false;
 			var valuesList = new List<ILInstruction>();
-			var initialValue = field.GetInitialValue(context.PEFile.Reader, context.TypeSystem);
+			var initialValue = field.GetInitialValue(context.PEFile, context.TypeSystem);
 			if (!DecodeArrayInitializer(elementType, initialValue, arrayLength, valuesList))
 				return false;
 			context.Step("InlineRuntimeHelpersInitializeArray: single-dim", inst);
@@ -773,6 +809,8 @@ namespace ICSharpCode.Decompiler.IL.Transforms
 			var totalLength = arrayLength.Aggregate(1, (t, l) => t * l);
 			if (initialValue.RemainingBytes < (totalLength * elementSize))
 				return false;
+
+			output.EnsureCapacity(totalLength + totalLength * arrayLength.Length);
 
 			for (int i = 0; i < totalLength; i++)
 			{

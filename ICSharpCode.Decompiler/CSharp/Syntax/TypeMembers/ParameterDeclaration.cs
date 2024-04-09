@@ -26,6 +26,8 @@
 
 #nullable enable
 
+using System;
+
 namespace ICSharpCode.Decompiler.CSharp.Syntax
 {
 	public enum ParameterModifier
@@ -34,17 +36,23 @@ namespace ICSharpCode.Decompiler.CSharp.Syntax
 		Ref,
 		Out,
 		Params,
-		In
+		In,
+		Scoped
 	}
 
 	public class ParameterDeclaration : AstNode
 	{
 		public static readonly Role<AttributeSection> AttributeRole = EntityDeclaration.AttributeRole;
+		public static readonly TokenRole ThisModifierRole = new TokenRole("this");
+		public static readonly TokenRole ScopedRefRole = new TokenRole("scoped");
+		[Obsolete("Renamed to ScopedRefRole")]
+		public static readonly TokenRole RefScopedRole = ScopedRefRole;
 		public static readonly TokenRole RefModifierRole = new TokenRole("ref");
 		public static readonly TokenRole OutModifierRole = new TokenRole("out");
-		public static readonly TokenRole ParamsModifierRole = new TokenRole("params");
-		public static readonly TokenRole ThisModifierRole = new TokenRole("this");
 		public static readonly TokenRole InModifierRole = new TokenRole("in");
+		[Obsolete("C# 11 preview: \"ref scoped\" no longer supported")]
+		public static readonly TokenRole ValueScopedRole = new TokenRole("scoped");
+		public static readonly TokenRole ParamsModifierRole = new TokenRole("params");
 
 		#region PatternPlaceholder
 		public static implicit operator ParameterDeclaration?(PatternMatching.Pattern pattern)
@@ -92,17 +100,14 @@ namespace ICSharpCode.Decompiler.CSharp.Syntax
 		}
 		#endregion
 
-		public override NodeType NodeType {
-			get {
-				return NodeType.Unknown;
-			}
-		}
+		public override NodeType NodeType => NodeType.Unknown;
 
 		public AstNodeCollection<AttributeSection> Attributes {
 			get { return GetChildrenByRole(AttributeRole); }
 		}
 
 		bool hasThisModifier;
+		bool isScopedRef;
 
 		public CSharpTokenNode ThisKeyword {
 			get {
@@ -120,6 +125,29 @@ namespace ICSharpCode.Decompiler.CSharp.Syntax
 				ThrowIfFrozen();
 				hasThisModifier = value;
 			}
+		}
+
+		public bool IsScopedRef {
+			get { return isScopedRef; }
+			set {
+				ThrowIfFrozen();
+				isScopedRef = value;
+			}
+		}
+
+		[Obsolete("Renamed to IsScopedRef")]
+		public bool IsRefScoped {
+			get { return isScopedRef; }
+			set {
+				ThrowIfFrozen();
+				isScopedRef = value;
+			}
+		}
+
+		[Obsolete("C# 11 preview: \"ref scoped\" no longer supported")]
+		public bool IsValueScoped {
+			get { return false; }
+			set { }
 		}
 
 		ParameterModifier parameterModifier;

@@ -27,6 +27,7 @@ using ICSharpCode.Decompiler;
 using ICSharpCode.Decompiler.CSharp;
 using ICSharpCode.Decompiler.CSharp.ProjectDecompiler;
 using ICSharpCode.Decompiler.DebugInfo;
+using ICSharpCode.Decompiler.Metadata;
 using ICSharpCode.ILSpy.Properties;
 using ICSharpCode.ILSpy.TextView;
 using ICSharpCode.ILSpy.TreeNodes;
@@ -58,7 +59,7 @@ namespace ICSharpCode.ILSpy
 
 		internal static void GeneratePdbForAssembly(LoadedAssembly assembly)
 		{
-			var file = assembly.GetPEFileOrNull();
+			var file = assembly.GetMetadataFileOrNull() as PEFile;
 			if (!PortablePdbWriter.HasCodeViewDebugDirectoryEntry(file))
 			{
 				MessageBox.Show(string.Format(Resources.CannotCreatePDBFile, Path.GetFileName(assembly.FileName)));
@@ -70,17 +71,19 @@ namespace ICSharpCode.ILSpy
 			dlg.InitialDirectory = Path.GetDirectoryName(assembly.FileName);
 			if (dlg.ShowDialog() != true)
 				return;
-			DecompilationOptions options = new DecompilationOptions();
+			DecompilationOptions options = MainWindow.Instance.CreateDecompilationOptions();
 			string fileName = dlg.FileName;
 			Docking.DockWorkspace.Instance.RunWithCancellation(ct => Task<AvalonEditTextOutput>.Factory.StartNew(() => {
 				AvalonEditTextOutput output = new AvalonEditTextOutput();
 				Stopwatch stopwatch = Stopwatch.StartNew();
+				options.CancellationToken = ct;
 				using (FileStream stream = new FileStream(fileName, FileMode.OpenOrCreate, FileAccess.Write))
 				{
 					try
 					{
-						var decompiler = new CSharpDecompiler(file, assembly.GetAssemblyResolver(), options.DecompilerSettings);
-						PortablePdbWriter.WritePdb(file, decompiler, options.DecompilerSettings, stream);
+						var decompiler = new CSharpDecompiler(file, assembly.GetAssemblyResolver(options.DecompilerSettings.AutoLoadAssemblyReferences), options.DecompilerSettings);
+						decompiler.CancellationToken = ct;
+						PortablePdbWriter.WritePdb(file, decompiler, options.DecompilerSettings, stream, progress: options.Progress);
 					}
 					catch (OperationCanceledException)
 					{
